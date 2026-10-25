@@ -12,7 +12,14 @@ import {
   clearCauldron,
   type CauldronValues,
 } from '../logic/cauldron';
+import {
+  formatLeaderboardDate,
+  isValidPlayerName,
+  qualifiesForLeaderboard,
+  type LeaderboardEntry,
+} from '../logic/leaderboard';
 import { createGameState, startNewGame, type GameState } from '../state/game-state';
+import { clearLeaderboard, getLeaderboard, saveLeaderboardEntry } from '../storage/leaderboard';
 import { clearSavedGame, readSavedGame, restoreSavedGame, saveGame } from '../storage/game-save';
 import { renderIngredientIcon } from './ingredient-icons';
 
@@ -230,6 +237,9 @@ export function mountGameScreen(root: HTMLElement): void {
           <div class="run-start-actions" data-run-start-actions>
             <button class="start-game-button" type="button" data-start-game>Start Game</button>
             <button class="continue-game-button" type="button" data-continue-game hidden>Continue Game</button>
+            <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-leaderboard>
+              Leaderboard
+            </button>
           </div>
           <button class="pause-game-button" type="button" data-pause hidden>Pause</button>
           <button class="brew-button" type="button" data-brew hidden disabled>Brew</button>
@@ -271,7 +281,83 @@ export function mountGameScreen(root: HTMLElement): void {
         <h2 id="game-over-title">Game Over</h2>
         <p data-game-over-reason></p>
         <p class="run-dialog__score">Final score <output data-final-score>0</output></p>
-        <button class="run-dialog__button" type="button" data-play-again>Play again</button>
+        <form class="leaderboard-name-form" data-player-name-form hidden novalidate>
+          <label for="player-name">Your name for the Top 10</label>
+          <input
+            id="player-name"
+            name="playerName"
+            type="text"
+            minlength="2"
+            maxlength="15"
+            autocomplete="nickname"
+            aria-describedby="player-name-help player-name-error"
+          />
+          <span id="player-name-help" class="leaderboard-form__help">
+            2–15 letters, numbers, spaces, _ or -
+          </span>
+          <p class="leaderboard-form__error" data-player-name-error aria-live="polite"></p>
+          <button class="run-dialog__button" type="submit" data-save-score>Save score</button>
+        </form>
+        <p class="leaderboard-form__message" data-score-message></p>
+        <div class="run-dialog__actions">
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-leaderboard>
+            Leaderboard
+          </button>
+          <button class="run-dialog__button" type="button" data-play-again>Play again</button>
+        </div>
+      </section>
+    </dialog>
+    <dialog class="leaderboard-dialog" data-leaderboard-dialog aria-labelledby="leaderboard-title">
+      <section data-leaderboard-panel>
+        <div class="leaderboard-dialog__header">
+          <div>
+            <span class="run-dialog__eyebrow">ALCHEMY JOURNAL</span>
+            <h2 id="leaderboard-title">Top 10 Alchemists</h2>
+          </div>
+          <button class="leaderboard-dialog__close" type="button" data-close-leaderboard aria-label="Close leaderboard">
+            ×
+          </button>
+        </div>
+        <p class="leaderboard-dialog__message" data-leaderboard-message aria-live="polite"></p>
+        <div class="leaderboard-table-wrap">
+          <table class="leaderboard-table">
+            <thead>
+              <tr>
+                <th scope="col">Rank</th>
+                <th scope="col">Name</th>
+                <th scope="col">Score</th>
+                <th scope="col">Date</th>
+              </tr>
+            </thead>
+            <tbody data-leaderboard-rows></tbody>
+          </table>
+          <p class="leaderboard-dialog__empty" data-leaderboard-empty>No results yet. Play a game to set the first score.</p>
+        </div>
+        <div class="run-dialog__actions leaderboard-dialog__actions">
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-clear-leaderboard>
+            Clear Leaderboard
+          </button>
+          <button class="run-dialog__button" type="button" data-close-leaderboard>Back</button>
+        </div>
+      </section>
+      <section
+        class="leaderboard-confirm"
+        data-clear-confirm-panel
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="clear-leaderboard-title"
+        aria-describedby="clear-leaderboard-description"
+        hidden
+      >
+        <span class="run-dialog__eyebrow">CLEAR RESULTS</span>
+        <h2 id="clear-leaderboard-title">Clear leaderboard?</h2>
+        <p id="clear-leaderboard-description">This will remove all saved Top 10 results from this browser.</p>
+        <div class="run-dialog__actions">
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-cancel-clear>
+            Keep results
+          </button>
+          <button class="run-dialog__button" type="button" data-confirm-clear>Clear Leaderboard</button>
+        </div>
       </section>
     </dialog>
   `;
@@ -298,8 +384,18 @@ export function mountGameScreen(root: HTMLElement): void {
   const timeProgress = root.querySelector<HTMLDivElement>('[data-time-progress]');
   const timeBar = root.querySelector<HTMLSpanElement>('[data-time-bar]');
   const runDialog = root.querySelector<HTMLDialogElement>('[data-run-dialog]');
+  const leaderboardDialog = root.querySelector<HTMLDialogElement>('[data-leaderboard-dialog]');
   const pausePanel = root.querySelector<HTMLElement>('[data-pause-panel]');
   const gameOverPanel = root.querySelector<HTMLElement>('[data-game-over-panel]');
+  const playerNameForm = root.querySelector<HTMLFormElement>('[data-player-name-form]');
+  const playerNameInput = root.querySelector<HTMLInputElement>('#player-name');
+  const playerNameError = root.querySelector<HTMLParagraphElement>('[data-player-name-error]');
+  const scoreMessage = root.querySelector<HTMLParagraphElement>('[data-score-message]');
+  const leaderboardRows = root.querySelector<HTMLTableSectionElement>('[data-leaderboard-rows]');
+  const leaderboardEmpty = root.querySelector<HTMLParagraphElement>('[data-leaderboard-empty]');
+  const leaderboardMessage = root.querySelector<HTMLParagraphElement>('[data-leaderboard-message]');
+  const leaderboardPanel = root.querySelector<HTMLElement>('[data-leaderboard-panel]');
+  const clearConfirmPanel = root.querySelector<HTMLElement>('[data-clear-confirm-panel]');
   const gameOverReason = root.querySelector<HTMLParagraphElement>('[data-game-over-reason]');
   const finalScoreOutput = root.querySelector<HTMLOutputElement>('[data-final-score]');
 
@@ -326,8 +422,18 @@ export function mountGameScreen(root: HTMLElement): void {
     !timeProgress ||
     !timeBar ||
     !runDialog ||
+    !leaderboardDialog ||
     !pausePanel ||
     !gameOverPanel ||
+    !playerNameForm ||
+    !playerNameInput ||
+    !playerNameError ||
+    !scoreMessage ||
+    !leaderboardRows ||
+    !leaderboardEmpty ||
+    !leaderboardMessage ||
+    !leaderboardPanel ||
+    !clearConfirmPanel ||
     !gameOverReason ||
     !finalScoreOutput
   ) {
@@ -350,12 +456,63 @@ export function mountGameScreen(root: HTMLElement): void {
   let availableSave = savedGameResult.status === 'available' ? savedGameResult.game : null;
   let lastSaveAt = 0;
   let endTime: number | null = null;
+  let shouldAskForName = false;
+  let scoreWasSaved = false;
+  let scoreFeedback = '';
+  let returnToGameOver = false;
 
   if (savedGameResult.status === 'invalid') {
     status.textContent = 'A saved run was damaged and could not be restored.';
   } else if (savedGameResult.status === 'unavailable') {
     status.textContent = 'Saved runs are unavailable in this browser session.';
   }
+
+  const renderLeaderboardEntries = (entries: readonly LeaderboardEntry[]): void => {
+    leaderboardRows.replaceChildren();
+    entries.forEach((entry, index) => {
+      const row = document.createElement('tr');
+      const rankCell = document.createElement('td');
+      const nameCell = document.createElement('td');
+      const scoreCell = document.createElement('td');
+      const dateCell = document.createElement('td');
+
+      rankCell.textContent = `${index + 1}`;
+      nameCell.textContent = entry.name;
+      scoreCell.textContent = `${entry.score}`;
+      dateCell.textContent = formatLeaderboardDate(entry.timestamp);
+      row.append(rankCell, nameCell, scoreCell, dateCell);
+      leaderboardRows.append(row);
+    });
+    leaderboardEmpty.hidden = entries.length > 0;
+  };
+
+  const refreshLeaderboard = (): void => {
+    const result = getLeaderboard();
+    if (result.status === 'unavailable') {
+      renderLeaderboardEntries([]);
+      leaderboardMessage.textContent =
+        'Leaderboard storage is unavailable in this browser session.';
+      return;
+    }
+
+    renderLeaderboardEntries(result.entries);
+    leaderboardMessage.textContent = result.recovered
+      ? 'Some damaged leaderboard data was ignored.'
+      : '';
+  };
+
+  const openLeaderboard = (fromGameOver: boolean): void => {
+    returnToGameOver = fromGameOver;
+    if (runDialog.open) {
+      runDialog.close();
+    }
+    leaderboardPanel.hidden = false;
+    clearConfirmPanel.hidden = true;
+    refreshLeaderboard();
+    if (!leaderboardDialog.open) {
+      leaderboardDialog.showModal();
+    }
+  };
 
   const render = (): void => {
     const hasActiveRun = state.hasStarted && !state.isGameOver;
@@ -445,6 +602,8 @@ export function mountGameScreen(root: HTMLElement): void {
     }
     finalScoreOutput.value = `${state.score}`;
     finalScoreOutput.textContent = `${state.score}`;
+    playerNameForm.hidden = !state.isGameOver || !shouldAskForName || scoreWasSaved;
+    scoreMessage.textContent = state.isGameOver ? scoreFeedback : '';
 
     if ((state.isPaused || state.isGameOver) && !runDialog.open && !document.hidden) {
       runDialog.showModal();
@@ -495,6 +654,17 @@ export function mountGameScreen(root: HTMLElement): void {
     stopTimer();
     status.textContent = GAME_OVER_MESSAGES[reason];
     finishSavedProgress();
+    const leaderboard = getLeaderboard();
+    shouldAskForName =
+      leaderboard.status === 'unavailable' ||
+      qualifiesForLeaderboard(state.score, leaderboard.entries);
+    scoreWasSaved = false;
+    scoreFeedback =
+      leaderboard.status === 'unavailable'
+        ? 'Leaderboard storage is unavailable. Your score could not be checked or saved.'
+        : shouldAskForName
+          ? 'Your score qualifies for the Top 10. Enter a name to save it.'
+          : 'This score did not reach the Top 10.';
     render();
   };
 
@@ -563,6 +733,9 @@ export function mountGameScreen(root: HTMLElement): void {
 
     if (target.closest('[data-start-game]')) {
       availableSave = null;
+      shouldAskForName = false;
+      scoreWasSaved = false;
+      scoreFeedback = '';
       startNewGame(state);
       status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
       beginTimer();
@@ -612,11 +785,55 @@ export function mountGameScreen(root: HTMLElement): void {
 
     if (target.closest('[data-play-again]')) {
       availableSave = null;
+      shouldAskForName = false;
+      scoreWasSaved = false;
+      scoreFeedback = '';
       startNewGame(state);
       status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
       beginTimer();
       render();
       persistProgress();
+      return;
+    }
+
+    if (target.closest('[data-open-leaderboard]')) {
+      openLeaderboard(state.isGameOver);
+      return;
+    }
+
+    if (target.closest('[data-close-leaderboard]')) {
+      if (leaderboardDialog.open) {
+        leaderboardDialog.close();
+      }
+      return;
+    }
+
+    if (target.closest('[data-clear-leaderboard]')) {
+      leaderboardPanel.hidden = true;
+      clearConfirmPanel.hidden = false;
+      clearConfirmPanel.querySelector<HTMLButtonElement>('[data-cancel-clear]')?.focus();
+      return;
+    }
+
+    if (target.closest('[data-cancel-clear]')) {
+      clearConfirmPanel.hidden = true;
+      leaderboardPanel.hidden = false;
+      leaderboardPanel.querySelector<HTMLButtonElement>('[data-clear-leaderboard]')?.focus();
+      return;
+    }
+
+    if (target.closest('[data-confirm-clear]')) {
+      if (clearLeaderboard()) {
+        leaderboardMessage.textContent = 'Leaderboard cleared.';
+        refreshLeaderboard();
+        leaderboardMessage.textContent = 'Leaderboard cleared.';
+      } else {
+        leaderboardMessage.textContent =
+          'Leaderboard could not be cleared in this browser session.';
+      }
+      clearConfirmPanel.hidden = true;
+      leaderboardPanel.hidden = false;
+      leaderboardPanel.querySelector<HTMLButtonElement>('[data-clear-leaderboard]')?.focus();
       return;
     }
 
@@ -686,8 +903,62 @@ export function mountGameScreen(root: HTMLElement): void {
     }
   });
 
+  root.addEventListener('submit', (event: SubmitEvent) => {
+    const target = event.target;
+    if (!(target instanceof HTMLFormElement) || !target.matches('[data-player-name-form]')) {
+      return;
+    }
+
+    event.preventDefault();
+    const name = playerNameInput.value.trim();
+    if (!isValidPlayerName(name)) {
+      playerNameError.textContent = 'Enter 2–15 characters using letters, numbers, spaces, _ or -.';
+      playerNameInput.focus();
+      return;
+    }
+
+    playerNameError.textContent = '';
+    const result = saveLeaderboardEntry(name, state.score);
+    if (result.status === 'invalid-name') {
+      playerNameError.textContent = 'Enter 2–15 characters using letters, numbers, spaces, _ or -.';
+      playerNameInput.focus();
+      return;
+    }
+    if (result.status === 'unavailable') {
+      scoreFeedback = 'Your score could not be saved because browser storage is unavailable.';
+      render();
+      return;
+    }
+    if (result.status === 'not-qualified') {
+      shouldAskForName = false;
+      scoreFeedback = 'This score no longer qualifies for the Top 10.';
+      render();
+      return;
+    }
+
+    shouldAskForName = false;
+    scoreWasSaved = true;
+    scoreFeedback = result.recovered
+      ? 'Score saved. Damaged leaderboard data was ignored.'
+      : 'Score saved to the Top 10.';
+    render();
+    gameOverPanel.querySelector<HTMLButtonElement>('[data-open-leaderboard]')?.focus();
+  });
+
   runDialog.addEventListener('cancel', (event: Event) => {
     event.preventDefault();
+  });
+
+  leaderboardDialog.addEventListener('close', () => {
+    clearConfirmPanel.hidden = true;
+    leaderboardPanel.hidden = false;
+    if (returnToGameOver && state.isGameOver && !runDialog.open) {
+      runDialog.showModal();
+    }
+  });
+
+  leaderboardDialog.addEventListener('cancel', () => {
+    returnToGameOver = state.isGameOver;
   });
 
   document.addEventListener('visibilitychange', () => {

@@ -17,12 +17,15 @@ Work is delivered incrementally through story branches and task pull requests:
 
 The current playable features are **US 1.1 — Ingredient Shelf & Cauldron**,
 **US 1.2 — Cauldron Parameter Bars**, **US 1.3 — Recipe & Brewing Check**,
-**US 1.4 — Timer & Game Over**, and **US 1.5 — Pause**. Start a run to receive
+**US 1.4 — Timer & Game Over**, **US 1.5 — Pause**, and **US 1.6 — Leaderboard**.
+Start a run to receive
 random stock for the first six ingredients and a random Medium recipe. Add
 ingredients to the four-slot cauldron, watch the summed temperature, density,
 and magic power move on the animated bars, and brew when the values match the
 recipe. A successful brew awards points and time; a failed brew costs a life.
-Stock spent on ingredients is not refunded.
+Stock spent on ingredients is not refunded. Scores that qualify for the Top 10
+can be saved with a validated player name; view and clear the local leaderboard
+from the menu or Game Over screen.
 
 ## Repository structure
 
@@ -39,8 +42,10 @@ Stock spent on ingredients is not refunded.
 │   ├── data/ingredients.ts   # Ordered ingredient catalogue and values
 │   ├── data/recipes.ts       # Fixed recipe pool and Level 1 settings
 │   ├── logic/cauldron.ts     # Ingredient, parameter, and brew rules
+│   ├── logic/leaderboard.ts  # Player-name validation, ranking, and date formatting
 │   ├── state/game-state.ts   # Run, stock, recipe, score, time, and lives
 │   ├── storage/game-save.ts  # Validated local run saves and restoration
+│   ├── storage/leaderboard.ts # Top-10 local storage and safe recovery
 │   ├── styles/main.css       # Room, shelf, cauldron, and parameter-bar styles
 │   └── ui/                   # DOM rendering and ingredient icons
 ├── eslint.config.js          # TypeScript and JavaScript lint rules
@@ -82,7 +87,11 @@ final score and offers **Play again**. The run ends when time or lives reach
 zero, or when all shelf stock is gone and the cauldron is empty. Active runs
 are saved in local storage; **Continue Game** restores a valid unfinished run
 in a paused state. Invalid or unavailable saved data is handled without
-crashing the game.
+crashing the game. Open **Leaderboard** from the menu or Game Over screen to
+view the Top 10 by score. If your result qualifies, submit a 2–15 character
+name using letters, digits, spaces, `_` or `-`. Equal scores keep the earlier
+result above the later one. **Clear Leaderboard** asks for confirmation before
+removing the local results.
 
 | #   | Difficulty | Recipe name    | Temperature | Density | Magic Power |
 | --- | ---------- | -------------- | :---------: | :-----: | :---------: |
