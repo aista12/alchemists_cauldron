@@ -1,9 +1,8 @@
 # Alchemist's Cauldron
 
-Alchemist's Cauldron is a browser-based alchemy mini-game built with TypeScript and
-plain web technologies. Its visual direction is inspired by the polished fantasy
-adventure interfaces of games such as Genshin Impact, while its artwork and
-interface are designed for this project.
+Alchemist's Cauldron is a browser-based alchemy mini-game built with TypeScript
+and plain web technologies. Its planned visual direction is inspired by polished
+fantasy adventure games, with original artwork created for this project.
 
 ## Game goal
 
@@ -23,9 +22,10 @@ Work is delivered incrementally through story branches and task pull requests:
 - **Level 2 — Extended game:** additional game features.
 - **Level 3 — Full game:** the complete feature set.
 
-The current project foundation includes the repository setup, the TypeScript
-source structure, and development tooling. The welcome screen is a visual
-scaffold; potion crafting and other game mechanics have not been implemented.
+The current scope is the project setup precondition: repository documentation,
+folder structure, bundler, strict TypeScript, code-quality tools, and Git hooks.
+The browser entry point is intentionally a minimal setup confirmation; no game
+screen or gameplay has been started.
 
 ## Repository structure
 
@@ -37,6 +37,7 @@ scaffold; potion crafting and other game mechanics have not been implemented.
 ├── public/                   # Static files served as-is
 ├── scripts/                  # Repository workflow helpers
 ├── src/
+│   ├── main.ts               # Minimal TypeScript entry point
 │   ├── assets/               # Individual image, icon, and audio assets
 │   ├── data/                 # Static game content and definitions
 │   ├── logic/                # Rules and game calculations (no DOM rendering)
@@ -80,8 +81,8 @@ npm run preview
 
 `npm run build` type-checks the strict TypeScript source before producing the
 optimized production bundle in `dist/`. Husky validates conventional commit
-messages and runs lint, formatting, and build checks before pushing. The current
-welcome screen is only a visual scaffold; gameplay is not implemented yet.
+messages and runs lint, formatting, and build checks before pushing. Game
+screens and mechanics will be implemented in later stories.
 
 ## Requirements
 
