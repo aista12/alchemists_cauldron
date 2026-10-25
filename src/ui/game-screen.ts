@@ -1,0 +1,1372 @@
+import { getShelfIngredients, type Ingredient, type IngredientId } from '../data/ingredients';
+import { DIFFICULTY_SETTINGS, type Difficulty, type Recipe } from '../data/recipes';
+import { addIngredient, brewCauldron, pourOut, type CauldronValues } from '../logic/cauldron';
+import { applyNewReactionEffects, calculateCauldronWithReactions } from '../logic/reactions';
+import {
+  formatLeaderboardDate,
+  isValidPlayerName,
+  qualifiesForLeaderboard,
+  type LeaderboardEntry,
+} from '../logic/leaderboard';
+import { createGameState, startNewGame, type GameState } from '../state/game-state';
+import { clearLeaderboard, getLeaderboard, saveLeaderboardEntry } from '../storage/leaderboard';
+import { clearSavedGame, readSavedGame, restoreSavedGame, saveGame } from '../storage/game-save';
+import { renderIngredientIcon } from './ingredient-icons';
+
+const signed = (value: number): string =>
+  value > 0 ? `+${value}` : value < 0 ? `−${Math.abs(value)}` : '0';
+
+function formatTime(milliseconds: number): string {
+  const totalSeconds = Math.ceil(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+interface ParameterBarDefinition {
+  key: keyof CauldronValues;
+  label: string;
+  domain: { min: number; max: number };
+}
+
+const PARAMETER_BARS: readonly ParameterBarDefinition[] = [
+  {
+    key: 'temperature',
+    label: 'Temperature',
+    domain: { min: -100, max: 100 },
+  },
+  {
+    key: 'density',
+    label: 'Density',
+    domain: { min: -80, max: 80 },
+  },
+  {
+    key: 'magicPower',
+    label: 'Magic Power',
+    domain: { min: 0, max: 160 },
+  },
+];
+
+const GAME_OVER_MESSAGES = {
+  time: 'Time ran out.',
+  lives: 'No lives remain.',
+  ingredients: 'Out of ingredients.',
+} as const;
+
+function toTrackPosition(value: number, domain: ParameterBarDefinition['domain']): number {
+  return Math.min(100, Math.max(0, ((value - domain.min) / (domain.max - domain.min)) * 100));
+}
+
+function renderParameterBar(definition: ParameterBarDefinition, recipe: Recipe | null): string {
+  const zeroPosition = toTrackPosition(0, definition.domain);
+  const target = recipe?.[definition.key];
+  const targetStart = target ? toTrackPosition(target.min, definition.domain) : zeroPosition;
+  const targetEnd = target ? toTrackPosition(target.max, definition.domain) : zeroPosition;
+  const targetLabel = target ? `Target ${signed(target.min)}–${signed(target.max)}` : 'Target —';
+
+  return `
+    <div
+      class="parameter-bar"
+      data-parameter="${definition.key}"
+      role="group"
+      aria-label="${definition.label}"
+      style="--zero-position: ${zeroPosition}%; --target-start: ${targetStart}%; --target-width: ${targetEnd - targetStart}%; --current-position: ${zeroPosition}%"
+    >
+      <div class="parameter-bar__heading">
+        <span class="parameter-bar__name">${definition.label}</span>
+        <span class="parameter-bar__values">
+              <output class="parameter-bar__current" data-current-value aria-label="Current value">0</output>
+          <span class="parameter-bar__target-label">${targetLabel}</span>
+        </span>
+      </div>
+      <div class="parameter-bar__track" aria-hidden="true">
+        <span class="parameter-bar__zero"></span>
+        <span class="parameter-bar__target"></span>
+        <span class="parameter-bar__marker"></span>
+      </div>
+    </div>
+  `;
+}
+
+function renderShelfCard(
+  ingredient: Ingredient,
+  stock: number,
+  blocked: boolean,
+  order: number,
+): string {
+  const empty = stock <= 0;
+  const disabled = empty || blocked;
+
+  return `
+    <button
+      class="ingredient-card ingredient-card--${ingredient.id}${empty ? ' ingredient-card--empty' : ''}"
+      type="button"
+      data-ingredient-id="${ingredient.id}"
+      data-shelf-order="${order}"
+      draggable="${!disabled}"
+      aria-describedby="ingredient-tooltip-${ingredient.id}"
+      aria-label="${ingredient.name}, temperature ${signed(ingredient.temperature)}, density ${signed(ingredient.density)}, magic power ${signed(ingredient.magicPower)}, stock ${stock}"
+      ${disabled ? 'disabled' : ''}
+    >
+      <span class="ingredient-card__stock" aria-label="Stock ${stock}">${stock}</span>
+      <span class="ingredient-card__icon">${empty ? '' : renderIngredientIcon(ingredient.icon)}</span>
+      <span class="ingredient-card__name">${ingredient.name}</span>
+      <span class="ingredient-card__values" hidden>
+        <span title="Temperature"><i class="value-mark value-mark--temperature">T</i>${signed(ingredient.temperature)}</span>
+        <span title="Density"><i class="value-mark value-mark--density">D</i>${signed(ingredient.density)}</span>
+        <span title="Magic Power"><i class="value-mark value-mark--magic">✦</i>${signed(ingredient.magicPower)}</span>
+      </span>
+      <span class="ingredient-tooltip" id="ingredient-tooltip-${ingredient.id}" role="tooltip" hidden>
+        <span><i class="value-mark value-mark--temperature">T</i> Temperature ${signed(ingredient.temperature)}</span>
+        <span><i class="value-mark value-mark--density">D</i> Density ${signed(ingredient.density)}</span>
+        <span><i class="value-mark value-mark--magic">✦</i> Magic Power ${signed(ingredient.magicPower)}</span>
+      </span>
+    </button>
+  `;
+}
+
+function renderCauldronSlot(
+  ingredientId: IngredientId | undefined,
+  index: number,
+  difficulty: Difficulty,
+): string {
+  const ingredient = getShelfIngredients(difficulty).find((item) => item.id === ingredientId);
+
+  if (!ingredient) {
+    return `<div class="cauldron-slot cauldron-slot--empty" aria-label="Empty cauldron slot ${index + 1}"><span>${index + 1}</span></div>`;
+  }
+
+  return `
+    <div class="cauldron-slot" aria-label="${ingredient.name}, slot ${index + 1}">
+      <span class="cauldron-slot__icon">${renderIngredientIcon(ingredient.icon)}</span>
+      <span class="cauldron-slot__name">${ingredient.name}</span>
+    </div>
+  `;
+}
+
+export function mountGameScreen(root: HTMLElement): void {
+  let state = createGameState();
+
+  root.innerHTML = `
+    <main class="game-room">
+      <header class="room-header">
+        <a class="game-title" href="./">
+          <span class="game-title__sigil" aria-hidden="true">✧</span>
+          <span>Alchemist's <em>Cauldron</em></span>
+        </a>
+        <div class="room-header__location"><span>✦</span> The quiet atelier</div>
+        <div class="room-header__day">FIELD NOTES <span>01</span></div>
+      </header>
+
+      <section class="atelier" aria-label="Alchemist's room">
+        <div class="atelier__wall">
+          <div class="window-view" aria-label="View through the window to a mountain valley">
+            <div class="window-view__sky"></div>
+            <div class="window-view__sun"></div>
+            <div class="window-view__cloud window-view__cloud--one"></div>
+            <div class="window-view__cloud window-view__cloud--two"></div>
+            <div class="window-view__mountain window-view__mountain--far"></div>
+            <div class="window-view__mountain window-view__mountain--near"></div>
+            <div class="window-view__hill"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--three"></div>
+            <div class="window-view__tree window-view__tree--one"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--four"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--five"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--six"></div>
+            <div class="window-view__tree window-view__tree--two"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--seven"></div>
+            <div class="window-view__village"></div>
+            <span class="window-view__caption">A quiet morning in Mondstadt</span>
+            <span class="window-view__handle" aria-hidden="true"></span>
+            <span class="window-view__frame window-view__frame--vertical"></span>
+            <span class="window-view__frame window-view__frame--horizontal"></span>
+          </div>
+          <div class="wall-shelf wall-shelf--left" aria-hidden="true">
+            <span>✧</span><span>♧</span><span>◈</span>
+          </div>
+          <div class="wall-shelf wall-shelf--right" aria-hidden="true">
+            <span>⌕</span><span>✦</span><span>♧</span>
+          </div>
+          <div class="atelier__note">
+            <span class="atelier__note-mark">✦</span>
+            <span>Every journey begins<br />with a curious mind.</span>
+          </div>
+        </div>
+
+        <div class="worktable" aria-hidden="true">
+          <span class="worktable__edge"></span>
+        </div>
+
+        <section class="workbench" aria-label="Cauldron">
+          <div class="workbench__label">
+            <span class="workbench__ornament"></span>
+            <h1>Wayfarer's Cauldron</h1>
+            <span class="workbench__ornament"></span>
+          </div>
+          <div class="cauldron-bowl" aria-hidden="true">
+            <span class="cauldron-bowl__steam cauldron-bowl__steam--one"></span>
+            <span class="cauldron-bowl__steam cauldron-bowl__steam--two"></span>
+            <span class="cauldron-bowl__steam cauldron-bowl__steam--three"></span>
+            <span class="cauldron-bowl__rim"></span>
+            <span class="cauldron-bowl__body"><span>✧</span></span>
+            <span class="cauldron-bowl__foot cauldron-bowl__foot--left"></span>
+            <span class="cauldron-bowl__foot cauldron-bowl__foot--right"></span>
+          </div>
+          <span class="brew-explosion" aria-hidden="true"></span>
+          <section class="parameter-bars" data-parameter-bars aria-label="Active recipe and cauldron values">
+            <div class="run-hud" data-run-hud>
+              <div class="run-hud__timer" data-timer>
+                <span class="run-hud__item">TIME <output data-time>02:30</output></span>
+                <div
+                  class="timer-bar"
+                  data-time-progress
+                  role="progressbar"
+                  aria-label="Time remaining"
+                  aria-valuemin="0"
+                  aria-valuemax="${DIFFICULTY_SETTINGS[state.difficulty].startTimeSeconds}"
+                  aria-valuenow="0"
+                >
+                  <span data-time-bar></span>
+                </div>
+              </div>
+              <span class="run-hud__item">SCORE <output data-score>0</output></span>
+              <span class="run-hud__item run-hud__lives" data-lives aria-label="Lives: 3"></span>
+            </div>
+            <h2 class="parameter-bars__heading">
+              <span>Current recipe</span>
+              <span class="parameter-bars__recipe" data-recipe-name>Begin your run</span>
+            </h2>
+            ${PARAMETER_BARS.map((definition) => renderParameterBar(definition, null)).join('')}
+            <div class="recipe-counter" data-recipe-counter>
+              <span class="recipe-counter__label">Ingredients</span>
+              <span class="recipe-counter__count" data-counter>0 <i>/</i> ${DIFFICULTY_SETTINGS[state.difficulty].cauldronCapacity}</span>
+            </div>
+          </section>
+          <p class="workbench__hint" data-status aria-live="polite">Begin a run to receive your recipe.</p>
+          <div class="run-start-actions" data-run-start-actions>
+            <div class="run-start-actions__primary">
+              <button class="start-game-button" type="button" data-start-game>Start Game</button>
+              <button class="continue-game-button" type="button" data-continue-game hidden>Continue Game</button>
+            </div>
+            <div class="run-start-actions__secondary">
+              <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-settings>
+                Settings
+              </button>
+              <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-help>
+                Help
+              </button>
+              <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-leaderboard>
+                Leaderboard
+              </button>
+            </div>
+          </div>
+          <button class="pause-game-button" type="button" data-pause hidden>Pause</button>
+          <button class="brew-button" type="button" data-brew hidden disabled>Brew</button>
+          <div class="cauldron-slots" data-cauldron aria-live="polite"></div>
+          <button class="clear-button" type="button" data-pour-out disabled>Pour Out (−10 s)</button>
+        </section>
+
+        <section class="ingredient-shelf" aria-label="Ingredient shelf">
+          <div class="ingredient-shelf__header">
+            <div>
+              <span class="ingredient-shelf__eyebrow">YOUR FIELD COLLECTION</span>
+              <h2>Ingredients</h2>
+            </div>
+            <p>Choose a material to add it to the cauldron.</p>
+          </div>
+          <div class="ingredient-grid" data-shelf></div>
+          <p class="shelf-message" data-shelf-message aria-live="polite"></p>
+        </section>
+      </section>
+      <footer class="room-footer">
+        <span>✧ &nbsp; ALCHEMY JOURNAL</span>
+        <span>Ingredients are precious. Each addition uses one portion.</span>
+        <span>MONDSTADT · 09:15</span>
+      </footer>
+    </main>
+    <dialog class="run-dialog" data-run-dialog aria-labelledby="run-dialog-title">
+      <section data-pause-panel>
+        <span class="run-dialog__eyebrow">ALCHEMY PAUSED</span>
+        <h2 id="run-dialog-title">Pause</h2>
+        <div class="run-dialog__actions">
+          <button class="run-dialog__button" type="button" data-resume>Resume</button>
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-exit-menu>
+            Exit to Menu
+          </button>
+        </div>
+      </section>
+      <section data-game-over-panel hidden>
+        <span class="run-dialog__eyebrow">ALCHEMY JOURNAL</span>
+        <h2 id="game-over-title">Game Over</h2>
+        <p data-game-over-reason></p>
+        <p class="run-dialog__score">Final score <output data-final-score>0</output></p>
+        <form class="leaderboard-name-form" data-player-name-form hidden novalidate>
+          <label for="player-name">Your name for the Top 10</label>
+          <input
+            id="player-name"
+            name="playerName"
+            type="text"
+            minlength="2"
+            maxlength="15"
+            autocomplete="nickname"
+            aria-describedby="player-name-help player-name-error"
+          />
+          <span id="player-name-help" class="leaderboard-form__help">
+            2–15 letters, numbers, spaces, _ or -
+          </span>
+          <p class="leaderboard-form__error" data-player-name-error aria-live="polite"></p>
+          <button class="run-dialog__button" type="submit" data-save-score>Save score</button>
+        </form>
+        <p class="leaderboard-form__message" data-score-message></p>
+        <div class="run-dialog__actions">
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-leaderboard>
+            Leaderboard
+          </button>
+          <button class="run-dialog__button" type="button" data-play-again>Play again</button>
+        </div>
+      </section>
+    </dialog>
+    <dialog class="leaderboard-dialog" data-leaderboard-dialog aria-labelledby="leaderboard-title">
+      <section data-leaderboard-panel>
+        <div class="leaderboard-dialog__header">
+          <div>
+            <span class="run-dialog__eyebrow">ALCHEMY JOURNAL</span>
+            <h2 id="leaderboard-title">Top 10 Alchemists</h2>
+          </div>
+          <button class="leaderboard-dialog__close" type="button" data-close-leaderboard aria-label="Close leaderboard">
+            ×
+          </button>
+        </div>
+        <p class="leaderboard-dialog__message" data-leaderboard-message aria-live="polite"></p>
+        <div class="leaderboard-table-wrap">
+          <table class="leaderboard-table">
+            <thead>
+              <tr>
+                <th scope="col">Rank</th>
+                <th scope="col">Name</th>
+                <th scope="col">Difficulty</th>
+                <th scope="col">Score</th>
+                <th scope="col">Date</th>
+              </tr>
+            </thead>
+            <tbody data-leaderboard-rows></tbody>
+          </table>
+          <p class="leaderboard-dialog__empty" data-leaderboard-empty>No results yet. Play a game to set the first score.</p>
+        </div>
+        <div class="run-dialog__actions leaderboard-dialog__actions">
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-clear-leaderboard>
+            Clear Leaderboard
+          </button>
+          <button class="run-dialog__button" type="button" data-close-leaderboard>Back</button>
+        </div>
+      </section>
+      <section
+        class="leaderboard-confirm"
+        data-clear-confirm-panel
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="clear-leaderboard-title"
+        aria-describedby="clear-leaderboard-description"
+        hidden
+      >
+        <span class="run-dialog__eyebrow">CLEAR RESULTS</span>
+        <h2 id="clear-leaderboard-title">Clear leaderboard?</h2>
+        <p id="clear-leaderboard-description">This will remove all saved Top 10 results for this difficulty from this browser.</p>
+        <div class="run-dialog__actions">
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-cancel-clear>
+            Keep results
+          </button>
+          <button class="run-dialog__button" type="button" data-confirm-clear>Clear Leaderboard</button>
+        </div>
+      </section>
+    </dialog>
+    <dialog class="run-dialog settings-dialog" data-settings-dialog aria-labelledby="settings-title">
+      <span class="run-dialog__eyebrow">PREPARE YOUR ATELIER</span>
+      <h2 id="settings-title">Choose Difficulty</h2>
+      <p class="settings-dialog__intro">Your choice sets the ingredients and rules for the next run.</p>
+      <div class="difficulty-options">
+        ${(['Easy', 'Medium', 'Hard'] as const)
+          .map(
+            (difficulty) => `
+              <button class="difficulty-option" type="button" data-select-difficulty="${difficulty}" aria-pressed="${state.difficulty === difficulty}">
+                <span class="difficulty-option__name">${difficulty}</span>
+                <span class="difficulty-option__details" data-difficulty-summary></span>
+              </button>
+            `,
+          )
+          .join('')}
+      </div>
+      <div class="run-dialog__actions">
+        <button class="run-dialog__button" type="button" data-close-settings>Done</button>
+      </div>
+    </dialog>
+    <dialog class="run-dialog help-dialog" data-help-dialog aria-labelledby="help-title">
+      <span class="run-dialog__eyebrow">FIELD GUIDE</span>
+      <h2 id="help-title">How to Play</h2>
+      <ul class="help-dialog__rules">
+        <li>Choose a difficulty in Settings, then start a run.</li>
+        <li>Click or drag ingredients into the cauldron to match the recipe ranges.</li>
+        <li>During play, press 1–8 to add a shelf ingredient, B to brew, O to pour out, or P/Escape to pause.</li>
+        <li>Success earns points and time; failure costs a life. Reactions can alter values and spend time or lives.</li>
+        <li>Pause to stop the timer. Your unfinished run can be continued later.</li>
+      </ul>
+      <div class="run-dialog__actions">
+        <button class="run-dialog__button" type="button" data-close-help>Back</button>
+      </div>
+    </dialog>
+  `;
+
+  const shelf = root.querySelector<HTMLDivElement>('[data-shelf]');
+  const cauldron = root.querySelector<HTMLDivElement>('[data-cauldron]');
+  const counter = root.querySelector<HTMLSpanElement>('[data-counter]');
+  const pourOutButton = root.querySelector<HTMLButtonElement>('[data-pour-out]');
+  const runStartActions = root.querySelector<HTMLDivElement>('[data-run-start-actions]');
+  const startButton = root.querySelector<HTMLButtonElement>('[data-start-game]');
+  const continueButton = root.querySelector<HTMLButtonElement>('[data-continue-game]');
+  const settingsDialog = root.querySelector<HTMLDialogElement>('[data-settings-dialog]');
+  const helpDialog = root.querySelector<HTMLDialogElement>('[data-help-dialog]');
+  const difficultyOptions = Array.from(
+    root.querySelectorAll<HTMLButtonElement>('[data-select-difficulty]'),
+  );
+  const pauseButton = root.querySelector<HTMLButtonElement>('[data-pause]');
+  const brewButton = root.querySelector<HTMLButtonElement>('[data-brew]');
+  const status = root.querySelector<HTMLParagraphElement>('[data-status]');
+  const shelfMessage = root.querySelector<HTMLParagraphElement>('[data-shelf-message]');
+  const parameterBars = root.querySelector<HTMLElement>('[data-parameter-bars]');
+  const recipeName = root.querySelector<HTMLSpanElement>('[data-recipe-name]');
+  const recipeCounter = root.querySelector<HTMLDivElement>('[data-recipe-counter]');
+  const runHud = root.querySelector<HTMLDivElement>('[data-run-hud]');
+  const timeOutput = root.querySelector<HTMLOutputElement>('[data-time]');
+  const scoreOutput = root.querySelector<HTMLOutputElement>('[data-score]');
+  const livesOutput = root.querySelector<HTMLSpanElement>('[data-lives]');
+  const timer = root.querySelector<HTMLDivElement>('[data-timer]');
+  const timeProgress = root.querySelector<HTMLDivElement>('[data-time-progress]');
+  const timeBar = root.querySelector<HTMLSpanElement>('[data-time-bar]');
+  const runDialog = root.querySelector<HTMLDialogElement>('[data-run-dialog]');
+  const leaderboardDialog = root.querySelector<HTMLDialogElement>('[data-leaderboard-dialog]');
+  const pausePanel = root.querySelector<HTMLElement>('[data-pause-panel]');
+  const gameOverPanel = root.querySelector<HTMLElement>('[data-game-over-panel]');
+  const playerNameForm = root.querySelector<HTMLFormElement>('[data-player-name-form]');
+  const playerNameInput = root.querySelector<HTMLInputElement>('#player-name');
+  const playerNameError = root.querySelector<HTMLParagraphElement>('[data-player-name-error]');
+  const scoreMessage = root.querySelector<HTMLParagraphElement>('[data-score-message]');
+  const leaderboardRows = root.querySelector<HTMLTableSectionElement>('[data-leaderboard-rows]');
+  const leaderboardEmpty = root.querySelector<HTMLParagraphElement>('[data-leaderboard-empty]');
+  const leaderboardMessage = root.querySelector<HTMLParagraphElement>('[data-leaderboard-message]');
+  const leaderboardPanel = root.querySelector<HTMLElement>('[data-leaderboard-panel]');
+  const clearConfirmPanel = root.querySelector<HTMLElement>('[data-clear-confirm-panel]');
+  const gameOverReason = root.querySelector<HTMLParagraphElement>('[data-game-over-reason]');
+  const finalScoreOutput = root.querySelector<HTMLOutputElement>('[data-final-score]');
+  const leaderboardTitle = root.querySelector<HTMLHeadingElement>('#leaderboard-title');
+
+  if (
+    !shelf ||
+    !cauldron ||
+    !counter ||
+    !pourOutButton ||
+    !runStartActions ||
+    !startButton ||
+    !continueButton ||
+    !settingsDialog ||
+    !helpDialog ||
+    difficultyOptions.length !== 3 ||
+    !pauseButton ||
+    !brewButton ||
+    !status ||
+    !shelfMessage ||
+    !parameterBars ||
+    !recipeName ||
+    !recipeCounter ||
+    !runHud ||
+    !timeOutput ||
+    !scoreOutput ||
+    !livesOutput ||
+    !timer ||
+    !timeProgress ||
+    !timeBar ||
+    !runDialog ||
+    !leaderboardDialog ||
+    !pausePanel ||
+    !gameOverPanel ||
+    !playerNameForm ||
+    !playerNameInput ||
+    !playerNameError ||
+    !scoreMessage ||
+    !leaderboardRows ||
+    !leaderboardEmpty ||
+    !leaderboardMessage ||
+    !leaderboardPanel ||
+    !clearConfirmPanel ||
+    !gameOverReason ||
+    !finalScoreOutput ||
+    !leaderboardTitle
+  ) {
+    throw new Error('The alchemy screen is missing required elements.');
+  }
+
+  const parameterBarElements = PARAMETER_BARS.map((definition) => {
+    const bar = parameterBars.querySelector<HTMLDivElement>(`[data-parameter="${definition.key}"]`);
+    const currentValue = bar?.querySelector<HTMLOutputElement>('[data-current-value]');
+    const targetLabel = bar?.querySelector<HTMLSpanElement>('.parameter-bar__target-label');
+
+    if (!bar || !currentValue || !targetLabel) {
+      throw new Error(`The ${definition.label} bar is missing required elements.`);
+    }
+
+    return { definition, bar, currentValue, targetLabel };
+  });
+
+  const savedGameResult = readSavedGame();
+  let availableSave = savedGameResult.status === 'available' ? savedGameResult.game : null;
+  if (availableSave) {
+    state = createGameState(availableSave.difficulty);
+  }
+  let lastSaveAt = 0;
+  let endTime: number | null = null;
+  let shouldAskForName = false;
+  let scoreWasSaved = false;
+  let scoreFeedback = '';
+  let returnToGameOver = false;
+
+  if (savedGameResult.status === 'invalid') {
+    status.textContent = 'A saved run was damaged and could not be restored.';
+  } else if (savedGameResult.status === 'unavailable') {
+    status.textContent = 'Saved runs are unavailable in this browser session.';
+  }
+
+  const renderLeaderboardEntries = (entries: readonly LeaderboardEntry[]): void => {
+    leaderboardRows.replaceChildren();
+    entries.forEach((entry, index) => {
+      const row = document.createElement('tr');
+      const rankCell = document.createElement('td');
+      const nameCell = document.createElement('td');
+      const difficultyCell = document.createElement('td');
+      const scoreCell = document.createElement('td');
+      const dateCell = document.createElement('td');
+
+      rankCell.textContent = `${index + 1}`;
+      nameCell.textContent = entry.name;
+      difficultyCell.textContent = entry.difficulty;
+      scoreCell.textContent = `${entry.score}`;
+      dateCell.textContent = formatLeaderboardDate(entry.timestamp);
+      row.append(rankCell, nameCell, difficultyCell, scoreCell, dateCell);
+      leaderboardRows.append(row);
+    });
+    leaderboardEmpty.hidden = entries.length > 0;
+  };
+
+  const refreshLeaderboard = (): void => {
+    const result = getLeaderboard(state.difficulty);
+    if (result.status === 'unavailable') {
+      renderLeaderboardEntries([]);
+      leaderboardMessage.textContent =
+        'Leaderboard storage is unavailable in this browser session.';
+      return;
+    }
+
+    renderLeaderboardEntries(result.entries);
+    leaderboardMessage.textContent = result.recovered
+      ? 'Some damaged leaderboard data was ignored.'
+      : '';
+  };
+
+  const openLeaderboard = (fromGameOver: boolean): void => {
+    returnToGameOver = fromGameOver;
+    if (runDialog.open) {
+      runDialog.close();
+    }
+    leaderboardPanel.hidden = false;
+    clearConfirmPanel.hidden = true;
+    leaderboardTitle.textContent = `Top 10 · ${state.difficulty}`;
+    refreshLeaderboard();
+    if (!leaderboardDialog.open) {
+      leaderboardDialog.showModal();
+    }
+  };
+
+  const render = (): void => {
+    const settings = DIFFICULTY_SETTINGS[state.difficulty];
+    const shelfIngredients = getShelfIngredients(state.difficulty);
+    const hasActiveRun = state.hasStarted && !state.isGameOver;
+    const isPlaying = hasActiveRun && !state.isPaused;
+    const isFull = state.cauldronIngredients.length >= settings.cauldronCapacity;
+    const currentValues = calculateCauldronWithReactions(
+      state.cauldronIngredients,
+      state.difficulty,
+    );
+    const recipe = state.activeRecipe;
+
+    parameterBarElements.forEach(({ definition, bar, currentValue, targetLabel }) => {
+      const value = currentValues[definition.key];
+      const target = recipe?.[definition.key];
+      const inTargetRange = target !== undefined && value >= target.min && value <= target.max;
+      const zeroPosition = toTrackPosition(0, definition.domain);
+      const targetStart = target ? toTrackPosition(target.min, definition.domain) : zeroPosition;
+      const targetEnd = target ? toTrackPosition(target.max, definition.domain) : zeroPosition;
+
+      currentValue.value = `${value}`;
+      currentValue.textContent = signed(value);
+      bar.style.setProperty('--current-position', `${toTrackPosition(value, definition.domain)}%`);
+      bar.style.setProperty('--target-start', `${targetStart}%`);
+      bar.style.setProperty('--target-width', `${targetEnd - targetStart}%`);
+      bar.classList.toggle('parameter-bar--in-range', inTargetRange);
+      bar.setAttribute(
+        'aria-label',
+        target
+          ? `${definition.label}: ${value}. Target range ${target.min} to ${target.max}.`
+          : `${definition.label}: ${value}. No active recipe.`,
+      );
+      targetLabel.textContent = target
+        ? `Target ${signed(target.min)}–${signed(target.max)}`
+        : 'Target —';
+    });
+
+    recipeName.textContent = recipe ? `${recipe.name} · ${recipe.difficulty}` : 'Begin your run';
+    shelf.innerHTML = state.hasStarted
+      ? shelfIngredients
+          .map((ingredient, index) =>
+            renderShelfCard(
+              ingredient,
+              state.shelfStock[ingredient.id] ?? 0,
+              isFull || !isPlaying,
+              index + 1,
+            ),
+          )
+          .join('')
+      : '';
+    cauldron.innerHTML = Array.from({ length: settings.cauldronCapacity }, (_, index) =>
+      renderCauldronSlot(state.cauldronIngredients[index], index, state.difficulty),
+    ).join('');
+    counter.innerHTML = `${state.cauldronIngredients.length} <i>/</i> ${settings.cauldronCapacity}`;
+    recipeCounter.classList.toggle('recipe-counter--full', isFull);
+    pourOutButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
+    pourOutButton.hidden = !isPlaying;
+    pourOutButton.setAttribute(
+      'aria-label',
+      `Pour out; costs 10 seconds and discards ${state.cauldronIngredients.length} ingredients`,
+    );
+    runStartActions.hidden = state.hasStarted;
+    startButton.textContent = state.isGameOver ? 'Start a New Run' : 'Start Game';
+    continueButton.hidden = availableSave === null || state.hasStarted;
+    pauseButton.hidden = !hasActiveRun;
+    pauseButton.textContent = state.isPaused ? 'Resume' : 'Pause';
+    pauseButton.setAttribute('aria-pressed', `${state.isPaused}`);
+    brewButton.hidden = !hasActiveRun;
+    brewButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
+    runHud.hidden = false;
+    timeOutput.value = formatTime(state.timeRemainingMs);
+    timeOutput.textContent = formatTime(state.timeRemainingMs);
+    const timeRatio = Math.max(
+      0,
+      Math.min(1, state.timeRemainingMs / (settings.startTimeSeconds * 1000)),
+    );
+    timeBar.style.width = `${timeRatio * 100}%`;
+    timeProgress.setAttribute('aria-valuemax', `${settings.startTimeSeconds}`);
+    timeProgress.setAttribute('aria-valuenow', `${Math.ceil(state.timeRemainingMs / 1000)}`);
+    timer.classList.toggle('run-hud__timer--urgent', state.timeRemainingMs < 15_000);
+    scoreOutput.value = `${state.score}`;
+    scoreOutput.textContent = `${state.score}`;
+    livesOutput.hidden = !state.hasStarted;
+    livesOutput.textContent = Array.from({ length: settings.startingLives }, (_, index) =>
+      index < state.lives ? '♥' : '♡',
+    ).join(' ');
+    livesOutput.setAttribute('aria-label', `Lives: ${state.lives}`);
+    recipeCounter.setAttribute(
+      'aria-label',
+      `Ingredients: ${state.cauldronIngredients.length} / ${settings.cauldronCapacity}`,
+    );
+    shelfMessage.textContent = isFull
+      ? 'The cauldron is full. Empty it before adding more.'
+      : state.hasStarted
+        ? ''
+        : `${state.difficulty} selected. Open Settings to change difficulty.`;
+    shelf.classList.toggle('ingredient-grid--blocked', isFull);
+    difficultyOptions.forEach((button) => {
+      const difficulty = button.dataset.selectDifficulty;
+      if (difficulty === 'Easy' || difficulty === 'Medium' || difficulty === 'Hard') {
+        const optionSettings = DIFFICULTY_SETTINGS[difficulty];
+        button.setAttribute('aria-pressed', `${difficulty === state.difficulty}`);
+        const details = button.querySelector<HTMLSpanElement>('[data-difficulty-summary]');
+        if (details) {
+          details.textContent = `${optionSettings.shelfSize} ingredients · ${optionSettings.cauldronCapacity} slots · ${optionSettings.startTimeSeconds}s · ±${optionSettings.tolerance} · ${optionSettings.startingLives} lives · ${optionSettings.scorePerBrew} pts · +${optionSettings.timeBonusSeconds}s · ${optionSettings.reactionCount} reactions`;
+        }
+      }
+    });
+    pausePanel.hidden = state.isGameOver;
+    gameOverPanel.hidden = !state.isGameOver;
+    runDialog.setAttribute(
+      'aria-labelledby',
+      state.isGameOver ? 'game-over-title' : 'run-dialog-title',
+    );
+    if (state.gameOverReason) {
+      gameOverReason.textContent = GAME_OVER_MESSAGES[state.gameOverReason];
+    }
+    finalScoreOutput.value = `${state.score}`;
+    finalScoreOutput.textContent = `${state.score}`;
+    playerNameForm.hidden = !state.isGameOver || !shouldAskForName || scoreWasSaved;
+    scoreMessage.textContent = state.isGameOver ? scoreFeedback : '';
+
+    if ((state.isPaused || state.isGameOver) && !runDialog.open && !document.hidden) {
+      runDialog.showModal();
+    } else if (!state.isPaused && !state.isGameOver && runDialog.open) {
+      runDialog.close();
+    }
+  };
+
+  let timerHandle: number | undefined;
+
+  const stopTimer = (): void => {
+    if (timerHandle !== undefined) {
+      window.clearInterval(timerHandle);
+      timerHandle = undefined;
+    }
+  };
+
+  const updateTimeDisplay = (): void => {
+    const settings = DIFFICULTY_SETTINGS[state.difficulty];
+    timeOutput.value = formatTime(state.timeRemainingMs);
+    timeOutput.textContent = formatTime(state.timeRemainingMs);
+    const timeRatio = Math.max(
+      0,
+      Math.min(1, state.timeRemainingMs / (settings.startTimeSeconds * 1000)),
+    );
+    timeBar.style.width = `${timeRatio * 100}%`;
+    timeProgress.setAttribute('aria-valuemax', `${settings.startTimeSeconds}`);
+    timeProgress.setAttribute('aria-valuenow', `${Math.ceil(state.timeRemainingMs / 1000)}`);
+    timer.classList.toggle('run-hud__timer--urgent', state.timeRemainingMs < 15_000);
+  };
+
+  const persistProgress = (): void => {
+    if (state.hasStarted && !state.isGameOver && !saveGame(state)) {
+      status.textContent = 'Progress could not be saved in this browser session.';
+    }
+  };
+
+  const finishSavedProgress = (): void => {
+    availableSave = null;
+    if (!clearSavedGame()) {
+      status.textContent += ' Saved progress could not be cleared.';
+    }
+  };
+
+  const endRun = (reason: NonNullable<GameState['gameOverReason']>): void => {
+    state.isGameOver = true;
+    state.isPaused = false;
+    state.gameOverReason = reason;
+    endTime = null;
+    stopTimer();
+    status.textContent = GAME_OVER_MESSAGES[reason];
+    finishSavedProgress();
+    const leaderboard = getLeaderboard(state.difficulty);
+    shouldAskForName =
+      leaderboard.status === 'unavailable' ||
+      qualifiesForLeaderboard(state.score, leaderboard.entries);
+    scoreWasSaved = false;
+    scoreFeedback =
+      leaderboard.status === 'unavailable'
+        ? 'Leaderboard storage is unavailable. Your score could not be checked or saved.'
+        : shouldAskForName
+          ? 'Your score qualifies for the Top 10. Enter a name to save it.'
+          : 'This score did not reach the Top 10.';
+    render();
+  };
+
+  const hasNoIngredients = (): boolean =>
+    state.cauldronIngredients.length === 0 &&
+    getShelfIngredients(state.difficulty).every(
+      (ingredient) => (state.shelfStock[ingredient.id] ?? 0) === 0,
+    );
+
+  const updateTimer = (): void => {
+    if (!state.hasStarted || state.isGameOver || state.isPaused || endTime === null) {
+      return;
+    }
+
+    const now = Date.now();
+    state.timeRemainingMs = Math.max(0, endTime - now);
+
+    if (state.timeRemainingMs === 0) {
+      endRun('time');
+      return;
+    }
+
+    updateTimeDisplay();
+
+    if (now - lastSaveAt >= 1000) {
+      lastSaveAt = now;
+      persistProgress();
+    }
+  };
+
+  const beginTimer = (): void => {
+    if (document.hidden || state.isPaused) {
+      return;
+    }
+    endTime = Date.now() + state.timeRemainingMs;
+    if (timerHandle === undefined) {
+      timerHandle = window.setInterval(updateTimer, 200);
+    }
+  };
+
+  const pauseRun = (): void => {
+    updateTimer();
+    if (!state.hasStarted || state.isGameOver) {
+      return;
+    }
+    state.isPaused = true;
+    endTime = null;
+    stopTimer();
+    persistProgress();
+    render();
+  };
+
+  const resumeRun = (): void => {
+    if (!state.hasStarted || state.isGameOver) {
+      return;
+    }
+    state.isPaused = false;
+    beginTimer();
+    render();
+    persistProgress();
+  };
+
+  const triggerBrewFeedback = (result: 'success' | 'failure'): void => {
+    const bowl = root.querySelector<HTMLElement>('.cauldron-bowl');
+    const explosion = root.querySelector<HTMLElement>('.brew-explosion');
+    const feedbackTarget = result === 'success' ? bowl : explosion;
+    if (!feedbackTarget) {
+      return;
+    }
+
+    const className = result === 'success' ? 'cauldron-bowl--success' : 'brew-explosion--active';
+    feedbackTarget.classList.remove(className);
+    void feedbackTarget.offsetWidth;
+    feedbackTarget.classList.add(className);
+    feedbackTarget.addEventListener(
+      'animationend',
+      () => feedbackTarget.classList.remove(className),
+      { once: true },
+    );
+    if (result === 'failure') {
+      const atelier = root.querySelector<HTMLElement>('.atelier');
+      atelier?.classList.add('atelier--brew-failure');
+      atelier?.addEventListener(
+        'animationend',
+        () => atelier.classList.remove('atelier--brew-failure'),
+        { once: true },
+      );
+    }
+  };
+
+  const handleIngredientAdd = (ingredientId: IngredientId): void => {
+    updateTimer();
+    if (state.isGameOver || state.isPaused || !state.hasStarted) {
+      return;
+    }
+
+    const ingredient = getShelfIngredients(state.difficulty).find(
+      (item) => item.id === ingredientId,
+    );
+    if (!ingredient) {
+      return;
+    }
+
+    const previousIngredients = [...state.cauldronIngredients];
+    if (!addIngredient(state, ingredient.id)) {
+      return;
+    }
+
+    const reactions = applyNewReactionEffects(state, previousIngredients);
+    endTime = Date.now() + state.timeRemainingMs;
+    status.textContent = reactions.length
+      ? `${ingredient.name} added. Reaction${reactions.length > 1 ? 's' : ''}: ${reactions.join(', ')}.`
+      : `${ingredient.name} added to the cauldron.`;
+    if (state.lives <= 0) {
+      endRun('lives');
+      return;
+    }
+    if (state.timeRemainingMs <= 0) {
+      endRun('time');
+      return;
+    }
+
+    render();
+    if (hasNoIngredients()) {
+      endRun('ingredients');
+    } else {
+      persistProgress();
+    }
+  };
+
+  const handleBrew = (): void => {
+    updateTimer();
+    if (state.isGameOver || state.isPaused) {
+      return;
+    }
+
+    const result = brewCauldron(state);
+    if (result.status === 'success') {
+      const settings = DIFFICULTY_SETTINGS[state.difficulty];
+      const maximumTime = formatTime(settings.startTimeSeconds * 1000);
+      status.textContent = `Brew successful! +${settings.scorePerBrew} score and +${settings.timeBonusSeconds} seconds (maximum ${maximumTime}). New recipe: ${state.activeRecipe?.name ?? 'ready'}.`;
+      triggerBrewFeedback('success');
+    } else if (result.status === 'failure') {
+      status.textContent = state.isGameOver
+        ? 'The brew failed. No lives remain; your run is over.'
+        : `The brew failed. 1 life lost; ${state.lives} remaining.`;
+      triggerBrewFeedback('failure');
+    } else {
+      return;
+    }
+
+    if (result.status === 'failure' && state.isGameOver) {
+      endRun('lives');
+      return;
+    }
+
+    endTime = Date.now() + state.timeRemainingMs;
+    render();
+    if (hasNoIngredients()) {
+      endRun('ingredients');
+    } else {
+      persistProgress();
+    }
+  };
+
+  const handlePourOut = (): void => {
+    updateTimer();
+    if (state.isGameOver || state.isPaused || !pourOut(state)) {
+      return;
+    }
+    endTime = Date.now() + state.timeRemainingMs;
+    if (state.timeRemainingMs <= 0) {
+      endRun('time');
+      return;
+    }
+    status.textContent = 'The mixture was poured out. Ingredients remain spent.';
+    render();
+    if (hasNoIngredients()) {
+      endRun('ingredients');
+    } else {
+      persistProgress();
+    }
+  };
+
+  root.addEventListener('click', (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    if (target.closest('[data-start-game]')) {
+      availableSave = null;
+      shouldAskForName = false;
+      scoreWasSaved = false;
+      scoreFeedback = '';
+      startNewGame(state, state.difficulty);
+      status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
+      beginTimer();
+      render();
+      persistProgress();
+      return;
+    }
+
+    if (target.closest('[data-continue-game]') && availableSave) {
+      restoreSavedGame(state, availableSave);
+      availableSave = null;
+      stopTimer();
+      if (hasNoIngredients()) {
+        endRun('ingredients');
+        return;
+      }
+      status.textContent = 'Your saved run is paused. Press Resume when ready.';
+      render();
+      persistProgress();
+      return;
+    }
+
+    if (target.closest('[data-pause]')) {
+      status.textContent = 'Run paused.';
+      pauseRun();
+      return;
+    }
+
+    if (target.closest('[data-resume]')) {
+      status.textContent = 'Run resumed.';
+      resumeRun();
+      return;
+    }
+
+    if (target.closest('[data-exit-menu]')) {
+      stopTimer();
+      endTime = null;
+      availableSave = null;
+      state = createGameState(state.difficulty);
+      status.textContent = 'Run ended. Start a new game when you are ready.';
+      if (!clearSavedGame()) {
+        status.textContent = 'Saved progress could not be cleared.';
+      }
+      render();
+      return;
+    }
+
+    if (target.closest('[data-play-again]')) {
+      availableSave = null;
+      shouldAskForName = false;
+      scoreWasSaved = false;
+      scoreFeedback = '';
+      startNewGame(state, state.difficulty);
+      status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
+      beginTimer();
+      render();
+      persistProgress();
+      return;
+    }
+
+    if (target.closest('[data-open-leaderboard]')) {
+      openLeaderboard(state.isGameOver);
+      return;
+    }
+
+    if (target.closest('[data-open-settings]') && !state.hasStarted) {
+      settingsDialog.showModal();
+      return;
+    }
+
+    if (target.closest('[data-close-settings]')) {
+      settingsDialog.close();
+      return;
+    }
+
+    if (target.closest('[data-open-help]') && !state.hasStarted) {
+      helpDialog.showModal();
+      return;
+    }
+
+    if (target.closest('[data-close-help]')) {
+      helpDialog.close();
+      return;
+    }
+
+    const difficultyButton = target.closest<HTMLButtonElement>('[data-select-difficulty]');
+    if (difficultyButton && !state.hasStarted) {
+      const difficulty = difficultyButton.dataset.selectDifficulty;
+      if (difficulty === 'Easy' || difficulty === 'Medium' || difficulty === 'Hard') {
+        state.difficulty = difficulty;
+        status.textContent = `${difficulty} difficulty selected. Start a run when ready.`;
+        render();
+      }
+      return;
+    }
+
+    if (target.closest('[data-close-leaderboard]')) {
+      if (leaderboardDialog.open) {
+        leaderboardDialog.close();
+      }
+      return;
+    }
+
+    if (target.closest('[data-clear-leaderboard]')) {
+      leaderboardPanel.hidden = true;
+      clearConfirmPanel.hidden = false;
+      clearConfirmPanel.querySelector<HTMLButtonElement>('[data-cancel-clear]')?.focus();
+      return;
+    }
+
+    if (target.closest('[data-cancel-clear]')) {
+      clearConfirmPanel.hidden = true;
+      leaderboardPanel.hidden = false;
+      leaderboardPanel.querySelector<HTMLButtonElement>('[data-clear-leaderboard]')?.focus();
+      return;
+    }
+
+    if (target.closest('[data-confirm-clear]')) {
+      if (clearLeaderboard(state.difficulty)) {
+        leaderboardMessage.textContent = 'Leaderboard cleared.';
+        refreshLeaderboard();
+        leaderboardMessage.textContent = 'Leaderboard cleared.';
+      } else {
+        leaderboardMessage.textContent =
+          'Leaderboard could not be cleared in this browser session.';
+      }
+      clearConfirmPanel.hidden = true;
+      leaderboardPanel.hidden = false;
+      leaderboardPanel.querySelector<HTMLButtonElement>('[data-clear-leaderboard]')?.focus();
+      return;
+    }
+
+    const ingredientButton = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    if (ingredientButton && !ingredientButton.disabled) {
+      const ingredientId = ingredientButton.dataset.ingredientId;
+      const ingredient = getShelfIngredients(state.difficulty).find(
+        (item) => item.id === ingredientId,
+      );
+      if (ingredient) {
+        handleIngredientAdd(ingredient.id);
+      }
+      return;
+    }
+
+    if (target.closest('[data-brew]') && !brewButton.disabled) {
+      handleBrew();
+      return;
+    }
+
+    if (target.closest('[data-pour-out]') && !pourOutButton.disabled) {
+      handlePourOut();
+    }
+  });
+
+  let draggedIngredientId: IngredientId | null = null;
+
+  root.addEventListener('dragstart', (event: DragEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    const ingredientId = card?.dataset.ingredientId;
+    const ingredient = getShelfIngredients(state.difficulty).find(
+      (item) => item.id === ingredientId,
+    );
+    if (!card || card.disabled || !ingredient || !event.dataTransfer) {
+      event.preventDefault();
+      return;
+    }
+    draggedIngredientId = ingredient.id;
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', ingredient.id);
+  });
+
+  root.addEventListener('dragend', () => {
+    draggedIngredientId = null;
+    cauldron.classList.remove('cauldron-slots--drop-ready');
+  });
+
+  cauldron.addEventListener('dragover', (event: DragEvent) => {
+    if (
+      !draggedIngredientId ||
+      state.isPaused ||
+      state.isGameOver ||
+      !state.hasStarted ||
+      state.cauldronIngredients.length >= DIFFICULTY_SETTINGS[state.difficulty].cauldronCapacity ||
+      (state.shelfStock[draggedIngredientId] ?? 0) <= 0
+    ) {
+      cauldron.classList.remove('cauldron-slots--drop-ready');
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+    cauldron.classList.add('cauldron-slots--drop-ready');
+  });
+
+  cauldron.addEventListener('dragleave', (event: DragEvent) => {
+    if (event.relatedTarget instanceof Node && cauldron.contains(event.relatedTarget)) {
+      return;
+    }
+    cauldron.classList.remove('cauldron-slots--drop-ready');
+  });
+
+  cauldron.addEventListener('drop', (event: DragEvent) => {
+    event.preventDefault();
+    cauldron.classList.remove('cauldron-slots--drop-ready');
+    const ingredientId = event.dataTransfer?.getData('text/plain');
+    const ingredient = getShelfIngredients(state.difficulty).find(
+      (item) => item.id === ingredientId && item.id === draggedIngredientId,
+    );
+    draggedIngredientId = null;
+    if (ingredient) {
+      handleIngredientAdd(ingredient.id);
+    }
+  });
+
+  const updateTooltipPosition = (card: HTMLButtonElement): void => {
+    const rect = card.getBoundingClientRect();
+    const opensLeft = rect.right + 190 > window.innerWidth;
+    const opensUp = rect.bottom + 110 > window.innerHeight;
+    card.classList.toggle('ingredient-card--tooltip-left', opensLeft);
+    card.classList.toggle('ingredient-card--tooltip-up', opensUp);
+    card.style.setProperty(
+      '--tooltip-x',
+      `${Math.max(8, opensLeft ? rect.left - 190 : rect.right + 8)}px`,
+    );
+    card.style.setProperty(
+      '--tooltip-y',
+      `${Math.max(8, opensUp ? rect.top - 110 : rect.bottom + 8)}px`,
+    );
+  };
+
+  root.addEventListener('mouseover', (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    if (
+      !card ||
+      card.disabled ||
+      state.isPaused ||
+      (event.relatedTarget instanceof Node && card.contains(event.relatedTarget))
+    ) {
+      return;
+    }
+    const tooltip = card.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (tooltip) {
+      updateTooltipPosition(card);
+      tooltip.hidden = false;
+    }
+  });
+
+  root.addEventListener('mouseout', (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    if (!card || (event.relatedTarget instanceof Node && card.contains(event.relatedTarget))) {
+      return;
+    }
+    const tooltip = card.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (tooltip) {
+      tooltip.hidden = true;
+    }
+  });
+
+  root.addEventListener('focusin', (event: FocusEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    const tooltip = card?.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (card && tooltip && !card.disabled && !state.isPaused) {
+      updateTooltipPosition(card);
+      tooltip.hidden = false;
+    }
+  });
+
+  root.addEventListener('focusout', (event: FocusEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    const tooltip = card?.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (card && tooltip) {
+      tooltip.hidden = true;
+    }
+  });
+
+  document.addEventListener('keydown', (event: KeyboardEvent) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.closest('input, textarea, select, [contenteditable="true"]'))
+    ) {
+      return;
+    }
+    if (!state.hasStarted || state.isPaused || state.isGameOver) {
+      return;
+    }
+
+    const key = event.key.toLowerCase();
+    if (key === 'p' || key === 'escape') {
+      event.preventDefault();
+      status.textContent = 'Run paused.';
+      pauseRun();
+    } else if (key === 'b') {
+      event.preventDefault();
+      handleBrew();
+    } else if (key === 'o') {
+      event.preventDefault();
+      handlePourOut();
+    } else if (/^[1-8]$/.test(key)) {
+      event.preventDefault();
+      const card = shelf.querySelector<HTMLButtonElement>(
+        `[data-shelf-order="${Number(key)}"]:not(:disabled)`,
+      );
+      card?.click();
+    }
+  });
+
+  root.addEventListener('submit', (event: SubmitEvent) => {
+    const target = event.target;
+    if (!(target instanceof HTMLFormElement) || !target.matches('[data-player-name-form]')) {
+      return;
+    }
+
+    event.preventDefault();
+    const name = playerNameInput.value.trim();
+    if (!isValidPlayerName(name)) {
+      playerNameError.textContent = 'Enter 2–15 characters using letters, numbers, spaces, _ or -.';
+      playerNameInput.focus();
+      return;
+    }
+
+    playerNameError.textContent = '';
+    const result = saveLeaderboardEntry(name, state.score, state.difficulty);
+    if (result.status === 'invalid-name') {
+      playerNameError.textContent = 'Enter 2–15 characters using letters, numbers, spaces, _ or -.';
+      playerNameInput.focus();
+      return;
+    }
+    if (result.status === 'unavailable') {
+      scoreFeedback = 'Your score could not be saved because browser storage is unavailable.';
+      render();
+      return;
+    }
+    if (result.status === 'not-qualified') {
+      shouldAskForName = false;
+      scoreFeedback = 'This score no longer qualifies for the Top 10.';
+      render();
+      return;
+    }
+
+    shouldAskForName = false;
+    scoreWasSaved = true;
+    scoreFeedback = result.recovered
+      ? 'Score saved. Damaged leaderboard data was ignored.'
+      : 'Score saved to the Top 10.';
+    render();
+    gameOverPanel.querySelector<HTMLButtonElement>('[data-open-leaderboard]')?.focus();
+  });
+
+  runDialog.addEventListener('cancel', (event: Event) => {
+    event.preventDefault();
+  });
+
+  leaderboardDialog.addEventListener('close', () => {
+    clearConfirmPanel.hidden = true;
+    leaderboardPanel.hidden = false;
+    if (returnToGameOver && state.isGameOver && !runDialog.open) {
+      runDialog.showModal();
+    }
+  });
+
+  leaderboardDialog.addEventListener('cancel', () => {
+    returnToGameOver = state.isGameOver;
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (state.hasStarted && !state.isGameOver && !state.isPaused) {
+        status.textContent = 'The run was paused because this tab became hidden.';
+        pauseRun();
+      }
+    } else if (state.isPaused || state.isGameOver) {
+      render();
+    }
+  });
+
+  window.addEventListener('pagehide', () => {
+    if (state.hasStarted && !state.isGameOver && !state.isPaused) {
+      updateTimer();
+      persistProgress();
+    }
+  });
+
+  render();
+}
