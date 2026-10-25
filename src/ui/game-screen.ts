@@ -4,7 +4,7 @@ import {
   type Ingredient,
   type IngredientId,
 } from '../data/ingredients';
-import { STARTING_LIVES, type Recipe } from '../data/recipes';
+import { STARTING_LIVES, STARTING_TIME_SECONDS, type Recipe } from '../data/recipes';
 import {
   addIngredient,
   calculateCauldron,
@@ -12,7 +12,7 @@ import {
   clearCauldron,
   type CauldronValues,
 } from '../logic/cauldron';
-import { createGameState, startNewGame } from '../state/game-state';
+import { createGameState, startNewGame, type GameState } from '../state/game-state';
 import { clearSavedGame, readSavedGame, restoreSavedGame, saveGame } from '../storage/game-save';
 import { renderIngredientIcon } from './ingredient-icons';
 
@@ -48,6 +48,12 @@ const PARAMETER_BARS: readonly ParameterBarDefinition[] = [
     domain: { min: 0, max: 160 },
   },
 ];
+
+const GAME_OVER_MESSAGES = {
+  time: 'Time ran out.',
+  lives: 'No lives remain.',
+  ingredients: 'Out of ingredients.',
+} as const;
 
 function toTrackPosition(value: number, domain: ParameterBarDefinition['domain']): number {
   return Math.min(100, Math.max(0, ((value - domain.min) / (domain.max - domain.min)) * 100));
@@ -90,7 +96,7 @@ function renderShelfCard(ingredient: Ingredient, stock: number, blocked: boolean
 
   return `
     <button
-      class="ingredient-card${empty ? ' ingredient-card--empty' : ''}"
+      class="ingredient-card ingredient-card--${ingredient.id}${empty ? ' ingredient-card--empty' : ''}"
       type="button"
       data-ingredient-id="${ingredient.id}"
       aria-label="${ingredient.name}, temperature ${signed(ingredient.temperature)}, density ${signed(ingredient.density)}, magic power ${signed(ingredient.magicPower)}, stock ${stock}"
@@ -124,7 +130,7 @@ function renderCauldronSlot(ingredientId: IngredientId | undefined, index: numbe
 }
 
 export function mountGameScreen(root: HTMLElement): void {
-  const state = createGameState();
+  let state = createGameState();
 
   root.innerHTML = `
     <main class="game-room">
@@ -147,10 +153,16 @@ export function mountGameScreen(root: HTMLElement): void {
             <div class="window-view__mountain window-view__mountain--far"></div>
             <div class="window-view__mountain window-view__mountain--near"></div>
             <div class="window-view__hill"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--three"></div>
             <div class="window-view__tree window-view__tree--one"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--four"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--five"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--six"></div>
             <div class="window-view__tree window-view__tree--two"></div>
+            <div class="window-view__tree window-view__tree--small window-view__tree--seven"></div>
             <div class="window-view__village"></div>
             <span class="window-view__caption">A quiet morning in Mondstadt</span>
+            <span class="window-view__handle" aria-hidden="true"></span>
             <span class="window-view__frame window-view__frame--vertical"></span>
             <span class="window-view__frame window-view__frame--horizontal"></span>
           </div>
@@ -187,7 +199,20 @@ export function mountGameScreen(root: HTMLElement): void {
           </div>
           <section class="parameter-bars" data-parameter-bars aria-label="Active recipe and cauldron values">
             <div class="run-hud" data-run-hud hidden>
-              <span class="run-hud__item">TIME <output data-time>00:00</output></span>
+              <div class="run-hud__timer" data-timer>
+                <span class="run-hud__item">TIME <output data-time>02:30</output></span>
+                <div
+                  class="timer-bar"
+                  data-time-progress
+                  role="progressbar"
+                  aria-label="Time remaining"
+                  aria-valuemin="0"
+                  aria-valuemax="${STARTING_TIME_SECONDS}"
+                  aria-valuenow="${STARTING_TIME_SECONDS}"
+                >
+                  <span data-time-bar></span>
+                </div>
+              </div>
               <span class="run-hud__item">SCORE <output data-score>0</output></span>
               <span class="run-hud__item run-hud__lives" data-lives aria-label="Lives: 3">♥ ♥ ♥</span>
             </div>
@@ -230,6 +255,25 @@ export function mountGameScreen(root: HTMLElement): void {
         <span>MONDSTADT · 09:15</span>
       </footer>
     </main>
+    <dialog class="run-dialog" data-run-dialog aria-labelledby="run-dialog-title">
+      <section data-pause-panel>
+        <span class="run-dialog__eyebrow">ALCHEMY PAUSED</span>
+        <h2 id="run-dialog-title">Pause</h2>
+        <div class="run-dialog__actions">
+          <button class="run-dialog__button" type="button" data-resume>Resume</button>
+          <button class="run-dialog__button run-dialog__button--secondary" type="button" data-exit-menu>
+            Exit to Menu
+          </button>
+        </div>
+      </section>
+      <section data-game-over-panel hidden>
+        <span class="run-dialog__eyebrow">ALCHEMY JOURNAL</span>
+        <h2 id="game-over-title">Game Over</h2>
+        <p data-game-over-reason></p>
+        <p class="run-dialog__score">Final score <output data-final-score>0</output></p>
+        <button class="run-dialog__button" type="button" data-play-again>Play again</button>
+      </section>
+    </dialog>
   `;
 
   const shelf = root.querySelector<HTMLDivElement>('[data-shelf]');
@@ -250,6 +294,14 @@ export function mountGameScreen(root: HTMLElement): void {
   const timeOutput = root.querySelector<HTMLOutputElement>('[data-time]');
   const scoreOutput = root.querySelector<HTMLOutputElement>('[data-score]');
   const livesOutput = root.querySelector<HTMLSpanElement>('[data-lives]');
+  const timer = root.querySelector<HTMLDivElement>('[data-timer]');
+  const timeProgress = root.querySelector<HTMLDivElement>('[data-time-progress]');
+  const timeBar = root.querySelector<HTMLSpanElement>('[data-time-bar]');
+  const runDialog = root.querySelector<HTMLDialogElement>('[data-run-dialog]');
+  const pausePanel = root.querySelector<HTMLElement>('[data-pause-panel]');
+  const gameOverPanel = root.querySelector<HTMLElement>('[data-game-over-panel]');
+  const gameOverReason = root.querySelector<HTMLParagraphElement>('[data-game-over-reason]');
+  const finalScoreOutput = root.querySelector<HTMLOutputElement>('[data-final-score]');
 
   if (
     !shelf ||
@@ -269,7 +321,15 @@ export function mountGameScreen(root: HTMLElement): void {
     !runHud ||
     !timeOutput ||
     !scoreOutput ||
-    !livesOutput
+    !livesOutput ||
+    !timer ||
+    !timeProgress ||
+    !timeBar ||
+    !runDialog ||
+    !pausePanel ||
+    !gameOverPanel ||
+    !gameOverReason ||
+    !finalScoreOutput
   ) {
     throw new Error('The alchemy screen is missing required elements.');
   }
@@ -289,6 +349,7 @@ export function mountGameScreen(root: HTMLElement): void {
   const savedGameResult = readSavedGame();
   let availableSave = savedGameResult.status === 'available' ? savedGameResult.game : null;
   let lastSaveAt = 0;
+  let endTime: number | null = null;
 
   if (savedGameResult.status === 'invalid') {
     status.textContent = 'A saved run was damaged and could not be restored.';
@@ -343,7 +404,7 @@ export function mountGameScreen(root: HTMLElement): void {
       'aria-label',
       `Empty cauldron; ${state.cauldronIngredients.length} ingredients will be discarded`,
     );
-    runStartActions.hidden = hasActiveRun;
+    runStartActions.hidden = state.hasStarted;
     startButton.textContent = state.isGameOver ? 'Start a New Run' : 'Start Game';
     continueButton.hidden = availableSave === null || state.hasStarted;
     pauseButton.hidden = !hasActiveRun;
@@ -354,6 +415,13 @@ export function mountGameScreen(root: HTMLElement): void {
     runHud.hidden = !state.hasStarted;
     timeOutput.value = formatTime(state.timeRemainingMs);
     timeOutput.textContent = formatTime(state.timeRemainingMs);
+    const timeRatio = Math.max(
+      0,
+      Math.min(1, state.timeRemainingMs / (STARTING_TIME_SECONDS * 1000)),
+    );
+    timeBar.style.width = `${timeRatio * 100}%`;
+    timeProgress.setAttribute('aria-valuenow', `${Math.ceil(state.timeRemainingMs / 1000)}`);
+    timer.classList.toggle('run-hud__timer--urgent', state.timeRemainingMs < 15_000);
     scoreOutput.value = `${state.score}`;
     scoreOutput.textContent = `${state.score}`;
     livesOutput.textContent = Array.from({ length: STARTING_LIVES }, (_, index) =>
@@ -366,9 +434,25 @@ export function mountGameScreen(root: HTMLElement): void {
     );
     shelfMessage.textContent = isFull ? 'The cauldron is full. Empty it before adding more.' : '';
     shelf.classList.toggle('ingredient-grid--blocked', isFull);
+    pausePanel.hidden = state.isGameOver;
+    gameOverPanel.hidden = !state.isGameOver;
+    runDialog.setAttribute(
+      'aria-labelledby',
+      state.isGameOver ? 'game-over-title' : 'run-dialog-title',
+    );
+    if (state.gameOverReason) {
+      gameOverReason.textContent = GAME_OVER_MESSAGES[state.gameOverReason];
+    }
+    finalScoreOutput.value = `${state.score}`;
+    finalScoreOutput.textContent = `${state.score}`;
+
+    if ((state.isPaused || state.isGameOver) && !runDialog.open && !document.hidden) {
+      runDialog.showModal();
+    } else if (!state.isPaused && !state.isGameOver && runDialog.open) {
+      runDialog.close();
+    }
   };
 
-  let lastTickAt: number | null = null;
   let timerHandle: number | undefined;
 
   const stopTimer = (): void => {
@@ -376,37 +460,18 @@ export function mountGameScreen(root: HTMLElement): void {
       window.clearInterval(timerHandle);
       timerHandle = undefined;
     }
-    lastTickAt = null;
   };
 
-  const tick = (): void => {
-    if (!state.hasStarted || state.isGameOver || state.isPaused || lastTickAt === null) {
-      return;
-    }
-
-    const now = Date.now();
-    state.timeRemainingMs = Math.max(0, state.timeRemainingMs - (now - lastTickAt));
-    lastTickAt = now;
-
-    if (state.timeRemainingMs === 0) {
-      state.isGameOver = true;
-      availableSave = null;
-      status.textContent = 'Time has run out. Your run is over.';
-      stopTimer();
-      if (!clearSavedGame()) {
-        status.textContent += ' Saved progress could not be cleared.';
-      }
-      render();
-      return;
-    }
-
+  const updateTimeDisplay = (): void => {
     timeOutput.value = formatTime(state.timeRemainingMs);
     timeOutput.textContent = formatTime(state.timeRemainingMs);
-
-    if (now - lastSaveAt >= 1000) {
-      lastSaveAt = now;
-      persistProgress();
-    }
+    const timeRatio = Math.max(
+      0,
+      Math.min(1, state.timeRemainingMs / (STARTING_TIME_SECONDS * 1000)),
+    );
+    timeBar.style.width = `${timeRatio * 100}%`;
+    timeProgress.setAttribute('aria-valuenow', `${Math.ceil(state.timeRemainingMs / 1000)}`);
+    timer.classList.toggle('run-hud__timer--urgent', state.timeRemainingMs < 15_000);
   };
 
   const persistProgress = (): void => {
@@ -422,11 +487,72 @@ export function mountGameScreen(root: HTMLElement): void {
     }
   };
 
-  const beginTimer = (): void => {
-    lastTickAt = document.hidden || state.isPaused ? null : Date.now();
-    if (timerHandle === undefined && !state.isPaused) {
-      timerHandle = window.setInterval(tick, 200);
+  const endRun = (reason: NonNullable<GameState['gameOverReason']>): void => {
+    state.isGameOver = true;
+    state.isPaused = false;
+    state.gameOverReason = reason;
+    endTime = null;
+    stopTimer();
+    status.textContent = GAME_OVER_MESSAGES[reason];
+    finishSavedProgress();
+    render();
+  };
+
+  const hasNoIngredients = (): boolean =>
+    state.cauldronIngredients.length === 0 &&
+    SHELF_INGREDIENTS.every((ingredient) => (state.shelfStock[ingredient.id] ?? 0) === 0);
+
+  const updateTimer = (): void => {
+    if (!state.hasStarted || state.isGameOver || state.isPaused || endTime === null) {
+      return;
     }
+
+    const now = Date.now();
+    state.timeRemainingMs = Math.max(0, endTime - now);
+
+    if (state.timeRemainingMs === 0) {
+      endRun('time');
+      return;
+    }
+
+    updateTimeDisplay();
+
+    if (now - lastSaveAt >= 1000) {
+      lastSaveAt = now;
+      persistProgress();
+    }
+  };
+
+  const beginTimer = (): void => {
+    if (document.hidden || state.isPaused) {
+      return;
+    }
+    endTime = Date.now() + state.timeRemainingMs;
+    if (timerHandle === undefined) {
+      timerHandle = window.setInterval(updateTimer, 200);
+    }
+  };
+
+  const pauseRun = (): void => {
+    updateTimer();
+    if (!state.hasStarted || state.isGameOver) {
+      return;
+    }
+    state.isPaused = true;
+    endTime = null;
+    stopTimer();
+    persistProgress();
+    render();
+  };
+
+  const resumeRun = (): void => {
+    if (!state.hasStarted || state.isGameOver) {
+      return;
+    }
+    state.isPaused = false;
+    beginTimer();
+    render();
+    persistProgress();
   };
 
   root.addEventListener('click', (event: MouseEvent) => {
@@ -449,26 +575,46 @@ export function mountGameScreen(root: HTMLElement): void {
       restoreSavedGame(state, availableSave);
       availableSave = null;
       stopTimer();
+      if (hasNoIngredients()) {
+        endRun('ingredients');
+        return;
+      }
       status.textContent = 'Your saved run is paused. Press Resume when ready.';
       render();
       persistProgress();
       return;
     }
 
-    if (target.closest('[data-pause]') && state.hasStarted && !state.isGameOver) {
-      if (state.isPaused) {
-        state.isPaused = false;
-        status.textContent = 'Run resumed.';
-        beginTimer();
-      } else {
-        tick();
-        if (state.isGameOver) {
-          return;
-        }
-        state.isPaused = true;
-        status.textContent = 'Run paused.';
-        stopTimer();
+    if (target.closest('[data-pause]')) {
+      status.textContent = 'Run paused.';
+      pauseRun();
+      return;
+    }
+
+    if (target.closest('[data-resume]')) {
+      status.textContent = 'Run resumed.';
+      resumeRun();
+      return;
+    }
+
+    if (target.closest('[data-exit-menu]')) {
+      stopTimer();
+      endTime = null;
+      availableSave = null;
+      state = createGameState();
+      status.textContent = 'Run ended. Start a new game when you are ready.';
+      if (!clearSavedGame()) {
+        status.textContent = 'Saved progress could not be cleared.';
       }
+      render();
+      return;
+    }
+
+    if (target.closest('[data-play-again]')) {
+      availableSave = null;
+      startNewGame(state);
+      status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
+      beginTimer();
       render();
       persistProgress();
       return;
@@ -476,6 +622,10 @@ export function mountGameScreen(root: HTMLElement): void {
 
     const ingredientButton = target.closest<HTMLButtonElement>('[data-ingredient-id]');
     if (ingredientButton && !ingredientButton.disabled) {
+      updateTimer();
+      if (state.isGameOver || state.isPaused) {
+        return;
+      }
       const ingredient = SHELF_INGREDIENTS.find(
         (item) => item.id === ingredientButton.dataset.ingredientId,
       );
@@ -488,7 +638,7 @@ export function mountGameScreen(root: HTMLElement): void {
     }
 
     if (target.closest('[data-brew]') && !brewButton.disabled) {
-      tick();
+      updateTimer();
       if (state.isGameOver) {
         return;
       }
@@ -504,32 +654,50 @@ export function mountGameScreen(root: HTMLElement): void {
         return;
       }
 
-      if (state.isGameOver) {
-        stopTimer();
-        finishSavedProgress();
+      if (result.status === 'failure' && state.isGameOver) {
+        endRun('lives');
+        return;
+      }
+
+      endTime = Date.now() + state.timeRemainingMs;
+      render();
+      if (hasNoIngredients()) {
+        endRun('ingredients');
       } else {
         persistProgress();
       }
-      render();
       return;
     }
 
     if (target.closest('[data-clear]') && !clearButton.disabled) {
+      updateTimer();
+      if (state.isGameOver || state.isPaused) {
+        return;
+      }
       const spentIngredients = state.cauldronIngredients.length;
       clearCauldron(state);
       status.textContent = `${spentIngredients} ingredient${spentIngredients === 1 ? '' : 's'} discarded. Shelf stock is unchanged.`;
+      if (hasNoIngredients()) {
+        endRun('ingredients');
+        return;
+      }
       render();
       persistProgress();
     }
   });
 
+  runDialog.addEventListener('cancel', (event: Event) => {
+    event.preventDefault();
+  });
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      tick();
-      lastTickAt = null;
-      persistProgress();
-    } else if (state.hasStarted && !state.isGameOver && !state.isPaused) {
-      lastTickAt = Date.now();
+      if (state.hasStarted && !state.isGameOver && !state.isPaused) {
+        status.textContent = 'The run was paused because this tab became hidden.';
+        pauseRun();
+      }
+    } else if (state.isPaused || state.isGameOver) {
+      render();
     }
   });
 

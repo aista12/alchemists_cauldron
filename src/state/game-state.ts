@@ -16,6 +16,7 @@ export interface GameState {
   hasStarted: boolean;
   isPaused: boolean;
   isGameOver: boolean;
+  gameOverReason: 'time' | 'lives' | 'ingredients' | null;
   score: number;
   timeRemainingMs: number;
   lives: number;
@@ -38,6 +39,7 @@ export function createGameState(): GameState {
     hasStarted: false,
     isPaused: false,
     isGameOver: false,
+    gameOverReason: null,
     score: 0,
     timeRemainingMs: 0,
     lives: STARTING_LIVES,
@@ -52,6 +54,7 @@ export function startNewGame(state: GameState, random: RandomSource = Math.rando
   state.hasStarted = true;
   state.isPaused = false;
   state.isGameOver = false;
+  state.gameOverReason = null;
   state.score = 0;
   state.timeRemainingMs = STARTING_TIME_SECONDS * 1000;
   state.lives = STARTING_LIVES;

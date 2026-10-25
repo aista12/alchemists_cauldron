@@ -85,6 +85,7 @@ export function brewCauldron(state: GameState, random: () => number = Math.rando
   state.lives -= 1;
   state.cauldronIngredients = [];
   state.isGameOver = state.lives <= 0;
+  state.gameOverReason = state.isGameOver ? 'lives' : null;
   return { status: 'failure', values };
 }
 

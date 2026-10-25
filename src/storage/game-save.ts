@@ -199,6 +199,7 @@ export function restoreSavedGame(state: GameState, game: SavedGame): void {
   state.hasStarted = true;
   state.isPaused = true;
   state.isGameOver = false;
+  state.gameOverReason = null;
   state.score = game.score;
   state.timeRemainingMs = game.timeRemainingMs;
   state.lives = game.lives;

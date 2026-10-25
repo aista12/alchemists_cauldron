@@ -16,12 +16,13 @@ Work is delivered incrementally through story branches and task pull requests:
 - **Level 3 — Full game:** the complete feature set.
 
 The current playable features are **US 1.1 — Ingredient Shelf & Cauldron**,
-**US 1.2 — Cauldron Parameter Bars**, and **US 1.3 — Recipe & Brewing Check**.
-Start a run to receive random stock for the first six ingredients and a random
-Medium recipe. Add ingredients to the four-slot cauldron, watch the summed
-temperature, density, and magic power move on the animated bars, and brew when
-the values match the recipe. A successful brew awards points and time; a failed
-brew costs a life. Stock spent on ingredients is not refunded.
+**US 1.2 — Cauldron Parameter Bars**, **US 1.3 — Recipe & Brewing Check**,
+**US 1.4 — Timer & Game Over**, and **US 1.5 — Pause**. Start a run to receive
+random stock for the first six ingredients and a random Medium recipe. Add
+ingredients to the four-slot cauldron, watch the summed temperature, density,
+and magic power move on the animated bars, and brew when the values match the
+recipe. A successful brew awards points and time; a failed brew costs a life.
+Stock spent on ingredients is not refunded.
 
 ## Repository structure
 
@@ -73,10 +74,14 @@ and costs one life. Ingredients used in either result stay spent.
 
 To play, select **Start Game**, add ingredients using their shelf cards, and
 press **Brew** to check the current mixture. **Empty cauldron** discards the
-current mixture without refunding stock. Use **Pause** and **Resume** to stop
-and restart the timer. Active runs are saved in local storage; **Continue Game**
-restores a valid unfinished run in a paused state. The timer also pauses while
-the browser tab is hidden. Invalid or unavailable saved data is handled without
+current mixture without refunding stock. The timer is shown as **MM:SS** and a
+remaining-time bar; it pulses red below 15 seconds. Use **Pause**, then
+**Resume** or **Exit to Menu** in the pause dialog. A hidden browser tab pauses
+the run automatically. The **Game Over** screen reports the end reason and
+final score and offers **Play again**. The run ends when time or lives reach
+zero, or when all shelf stock is gone and the cauldron is empty. Active runs
+are saved in local storage; **Continue Game** restores a valid unfinished run
+in a paused state. Invalid or unavailable saved data is handled without
 crashing the game.
 
 | #   | Difficulty | Recipe name    | Temperature | Density | Magic Power |
