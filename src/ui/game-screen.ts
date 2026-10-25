@@ -4,22 +4,30 @@ import {
   type Ingredient,
   type IngredientId,
 } from '../data/ingredients';
-import { ACTIVE_RECIPE } from '../data/recipes';
+import { STARTING_LIVES, type Recipe } from '../data/recipes';
 import {
   addIngredient,
   calculateCauldron,
+  brewCauldron,
   clearCauldron,
   type CauldronValues,
 } from '../logic/cauldron';
-import { createGameState } from '../state/game-state';
+import { createGameState, startNewGame } from '../state/game-state';
+import { clearSavedGame, readSavedGame, restoreSavedGame, saveGame } from '../storage/game-save';
 import { renderIngredientIcon } from './ingredient-icons';
 
 const signed = (value: number): string => (value > 0 ? `+${value}` : `${value}`);
 
+function formatTime(milliseconds: number): string {
+  const totalSeconds = Math.ceil(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
 interface ParameterBarDefinition {
   key: keyof CauldronValues;
   label: string;
-  target: { min: number; max: number };
   domain: { min: number; max: number };
 }
 
@@ -27,19 +35,16 @@ const PARAMETER_BARS: readonly ParameterBarDefinition[] = [
   {
     key: 'temperature',
     label: 'Temperature',
-    target: ACTIVE_RECIPE.temperature,
     domain: { min: -100, max: 100 },
   },
   {
     key: 'density',
     label: 'Density',
-    target: ACTIVE_RECIPE.density,
     domain: { min: -80, max: 80 },
   },
   {
     key: 'magicPower',
     label: 'Magic Power',
-    target: ACTIVE_RECIPE.magicPower,
     domain: { min: 0, max: 160 },
   },
 ];
@@ -48,10 +53,12 @@ function toTrackPosition(value: number, domain: ParameterBarDefinition['domain']
   return Math.min(100, Math.max(0, ((value - domain.min) / (domain.max - domain.min)) * 100));
 }
 
-function renderParameterBar(definition: ParameterBarDefinition): string {
+function renderParameterBar(definition: ParameterBarDefinition, recipe: Recipe | null): string {
   const zeroPosition = toTrackPosition(0, definition.domain);
-  const targetStart = toTrackPosition(definition.target.min, definition.domain);
-  const targetEnd = toTrackPosition(definition.target.max, definition.domain);
+  const target = recipe?.[definition.key];
+  const targetStart = target ? toTrackPosition(target.min, definition.domain) : zeroPosition;
+  const targetEnd = target ? toTrackPosition(target.max, definition.domain) : zeroPosition;
+  const targetLabel = target ? `Target ${signed(target.min)}–${signed(target.max)}` : 'Target —';
 
   return `
     <div
@@ -64,8 +71,8 @@ function renderParameterBar(definition: ParameterBarDefinition): string {
       <div class="parameter-bar__heading">
         <span class="parameter-bar__name">${definition.label}</span>
         <span class="parameter-bar__values">
-          <output class="parameter-bar__current" data-current-value aria-label="Current value">0</output>
-          <span class="parameter-bar__target-label">Target ${signed(definition.target.min)}–${signed(definition.target.max)}</span>
+              <output class="parameter-bar__current" data-current-value aria-label="Current value">0</output>
+          <span class="parameter-bar__target-label">${targetLabel}</span>
         </span>
       </div>
       <div class="parameter-bar__track" aria-hidden="true">
@@ -178,18 +185,29 @@ export function mountGameScreen(root: HTMLElement): void {
             <span class="cauldron-bowl__foot cauldron-bowl__foot--left"></span>
             <span class="cauldron-bowl__foot cauldron-bowl__foot--right"></span>
           </div>
-          <section class="parameter-bars" data-parameter-bars aria-label="Cauldron parameters">
+          <section class="parameter-bars" data-parameter-bars aria-label="Active recipe and cauldron values">
+            <div class="run-hud" data-run-hud hidden>
+              <span class="run-hud__item">TIME <output data-time>00:00</output></span>
+              <span class="run-hud__item">SCORE <output data-score>0</output></span>
+              <span class="run-hud__item run-hud__lives" data-lives aria-label="Lives: 3">♥ ♥ ♥</span>
+            </div>
             <h2 class="parameter-bars__heading">
-              <span>Cauldron values</span>
-              <span class="parameter-bars__recipe">${ACTIVE_RECIPE.name} · ${ACTIVE_RECIPE.difficulty}</span>
+              <span>Current recipe</span>
+              <span class="parameter-bars__recipe" data-recipe-name>Begin your run</span>
             </h2>
-            ${PARAMETER_BARS.map(renderParameterBar).join('')}
+            ${PARAMETER_BARS.map((definition) => renderParameterBar(definition, null)).join('')}
+            <div class="recipe-counter" data-recipe-counter>
+              <span class="recipe-counter__label">Ingredients</span>
+              <span class="recipe-counter__count" data-counter>0 <i>/</i> ${CAULDRON_CAPACITY}</span>
+            </div>
           </section>
-          <p class="workbench__hint" data-status aria-live="polite">Choose ingredients from your shelf to begin.</p>
-          <div class="recipe-counter">
-            <span class="recipe-counter__label">Ingredients</span>
-            <span class="recipe-counter__count" data-counter>0 <i>/</i> ${CAULDRON_CAPACITY}</span>
+          <p class="workbench__hint" data-status aria-live="polite">Begin a run to receive your recipe.</p>
+          <div class="run-start-actions" data-run-start-actions>
+            <button class="start-game-button" type="button" data-start-game>Start Game</button>
+            <button class="continue-game-button" type="button" data-continue-game hidden>Continue Game</button>
           </div>
+          <button class="pause-game-button" type="button" data-pause hidden>Pause</button>
+          <button class="brew-button" type="button" data-brew hidden disabled>Brew</button>
           <div class="cauldron-slots" data-cauldron aria-live="polite"></div>
           <button class="clear-button" type="button" data-clear disabled>Empty cauldron</button>
         </section>
@@ -218,18 +236,40 @@ export function mountGameScreen(root: HTMLElement): void {
   const cauldron = root.querySelector<HTMLDivElement>('[data-cauldron]');
   const counter = root.querySelector<HTMLSpanElement>('[data-counter]');
   const clearButton = root.querySelector<HTMLButtonElement>('[data-clear]');
+  const runStartActions = root.querySelector<HTMLDivElement>('[data-run-start-actions]');
+  const startButton = root.querySelector<HTMLButtonElement>('[data-start-game]');
+  const continueButton = root.querySelector<HTMLButtonElement>('[data-continue-game]');
+  const pauseButton = root.querySelector<HTMLButtonElement>('[data-pause]');
+  const brewButton = root.querySelector<HTMLButtonElement>('[data-brew]');
   const status = root.querySelector<HTMLParagraphElement>('[data-status]');
   const shelfMessage = root.querySelector<HTMLParagraphElement>('[data-shelf-message]');
   const parameterBars = root.querySelector<HTMLElement>('[data-parameter-bars]');
+  const recipeName = root.querySelector<HTMLSpanElement>('[data-recipe-name]');
+  const recipeCounter = root.querySelector<HTMLDivElement>('[data-recipe-counter]');
+  const runHud = root.querySelector<HTMLDivElement>('[data-run-hud]');
+  const timeOutput = root.querySelector<HTMLOutputElement>('[data-time]');
+  const scoreOutput = root.querySelector<HTMLOutputElement>('[data-score]');
+  const livesOutput = root.querySelector<HTMLSpanElement>('[data-lives]');
 
   if (
     !shelf ||
     !cauldron ||
     !counter ||
     !clearButton ||
+    !runStartActions ||
+    !startButton ||
+    !continueButton ||
+    !pauseButton ||
+    !brewButton ||
     !status ||
     !shelfMessage ||
-    !parameterBars
+    !parameterBars ||
+    !recipeName ||
+    !recipeCounter ||
+    !runHud ||
+    !timeOutput ||
+    !scoreOutput ||
+    !livesOutput
   ) {
     throw new Error('The alchemy screen is missing required elements.');
   }
@@ -237,51 +277,200 @@ export function mountGameScreen(root: HTMLElement): void {
   const parameterBarElements = PARAMETER_BARS.map((definition) => {
     const bar = parameterBars.querySelector<HTMLDivElement>(`[data-parameter="${definition.key}"]`);
     const currentValue = bar?.querySelector<HTMLOutputElement>('[data-current-value]');
+    const targetLabel = bar?.querySelector<HTMLSpanElement>('.parameter-bar__target-label');
 
-    if (!bar || !currentValue) {
+    if (!bar || !currentValue || !targetLabel) {
       throw new Error(`The ${definition.label} bar is missing required elements.`);
     }
 
-    return { definition, bar, currentValue };
+    return { definition, bar, currentValue, targetLabel };
   });
 
+  const savedGameResult = readSavedGame();
+  let availableSave = savedGameResult.status === 'available' ? savedGameResult.game : null;
+  let lastSaveAt = 0;
+
+  if (savedGameResult.status === 'invalid') {
+    status.textContent = 'A saved run was damaged and could not be restored.';
+  } else if (savedGameResult.status === 'unavailable') {
+    status.textContent = 'Saved runs are unavailable in this browser session.';
+  }
+
   const render = (): void => {
+    const hasActiveRun = state.hasStarted && !state.isGameOver;
+    const isPlaying = hasActiveRun && !state.isPaused;
     const isFull = state.cauldronIngredients.length >= CAULDRON_CAPACITY;
     const currentValues = calculateCauldron(state.cauldronIngredients);
+    const recipe = state.activeRecipe;
 
-    parameterBarElements.forEach(({ definition, bar, currentValue }) => {
+    parameterBarElements.forEach(({ definition, bar, currentValue, targetLabel }) => {
       const value = currentValues[definition.key];
-      const inTargetRange = value >= definition.target.min && value <= definition.target.max;
+      const target = recipe?.[definition.key];
+      const inTargetRange = target !== undefined && value >= target.min && value <= target.max;
+      const zeroPosition = toTrackPosition(0, definition.domain);
+      const targetStart = target ? toTrackPosition(target.min, definition.domain) : zeroPosition;
+      const targetEnd = target ? toTrackPosition(target.max, definition.domain) : zeroPosition;
 
       currentValue.value = `${value}`;
       currentValue.textContent = signed(value);
       bar.style.setProperty('--current-position', `${toTrackPosition(value, definition.domain)}%`);
+      bar.style.setProperty('--target-start', `${targetStart}%`);
+      bar.style.setProperty('--target-width', `${targetEnd - targetStart}%`);
       bar.classList.toggle('parameter-bar--in-range', inTargetRange);
       bar.setAttribute(
         'aria-label',
-        `${definition.label}: ${value}. Target range ${definition.target.min} to ${definition.target.max}.`,
+        target
+          ? `${definition.label}: ${value}. Target range ${target.min} to ${target.max}.`
+          : `${definition.label}: ${value}. No active recipe.`,
       );
+      targetLabel.textContent = target
+        ? `Target ${signed(target.min)}–${signed(target.max)}`
+        : 'Target —';
     });
 
+    recipeName.textContent = recipe ? `${recipe.name} · ${recipe.difficulty}` : 'Begin your run';
     shelf.innerHTML = SHELF_INGREDIENTS.map((ingredient) =>
-      renderShelfCard(ingredient, state.shelfStock[ingredient.id] ?? 0, isFull),
+      renderShelfCard(ingredient, state.shelfStock[ingredient.id] ?? 0, isFull || !isPlaying),
     ).join('');
     cauldron.innerHTML = Array.from({ length: CAULDRON_CAPACITY }, (_, index) =>
       renderCauldronSlot(state.cauldronIngredients[index], index),
     ).join('');
     counter.innerHTML = `${state.cauldronIngredients.length} <i>/</i> ${CAULDRON_CAPACITY}`;
-    clearButton.disabled = state.cauldronIngredients.length === 0;
+    recipeCounter.classList.toggle('recipe-counter--full', isFull);
+    clearButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
+    clearButton.hidden = !isPlaying || state.cauldronIngredients.length === 0;
     clearButton.setAttribute(
       'aria-label',
       `Empty cauldron; ${state.cauldronIngredients.length} ingredients will be discarded`,
+    );
+    runStartActions.hidden = hasActiveRun;
+    startButton.textContent = state.isGameOver ? 'Start a New Run' : 'Start Game';
+    continueButton.hidden = availableSave === null || state.hasStarted;
+    pauseButton.hidden = !hasActiveRun;
+    pauseButton.textContent = state.isPaused ? 'Resume' : 'Pause';
+    pauseButton.setAttribute('aria-pressed', `${state.isPaused}`);
+    brewButton.hidden = !hasActiveRun;
+    brewButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
+    runHud.hidden = !state.hasStarted;
+    timeOutput.value = formatTime(state.timeRemainingMs);
+    timeOutput.textContent = formatTime(state.timeRemainingMs);
+    scoreOutput.value = `${state.score}`;
+    scoreOutput.textContent = `${state.score}`;
+    livesOutput.textContent = Array.from({ length: STARTING_LIVES }, (_, index) =>
+      index < state.lives ? '♥' : '♡',
+    ).join(' ');
+    livesOutput.setAttribute('aria-label', `Lives: ${state.lives}`);
+    recipeCounter.setAttribute(
+      'aria-label',
+      `Ingredients: ${state.cauldronIngredients.length} / ${CAULDRON_CAPACITY}`,
     );
     shelfMessage.textContent = isFull ? 'The cauldron is full. Empty it before adding more.' : '';
     shelf.classList.toggle('ingredient-grid--blocked', isFull);
   };
 
+  let lastTickAt: number | null = null;
+  let timerHandle: number | undefined;
+
+  const stopTimer = (): void => {
+    if (timerHandle !== undefined) {
+      window.clearInterval(timerHandle);
+      timerHandle = undefined;
+    }
+    lastTickAt = null;
+  };
+
+  const tick = (): void => {
+    if (!state.hasStarted || state.isGameOver || state.isPaused || lastTickAt === null) {
+      return;
+    }
+
+    const now = Date.now();
+    state.timeRemainingMs = Math.max(0, state.timeRemainingMs - (now - lastTickAt));
+    lastTickAt = now;
+
+    if (state.timeRemainingMs === 0) {
+      state.isGameOver = true;
+      availableSave = null;
+      status.textContent = 'Time has run out. Your run is over.';
+      stopTimer();
+      if (!clearSavedGame()) {
+        status.textContent += ' Saved progress could not be cleared.';
+      }
+      render();
+      return;
+    }
+
+    timeOutput.value = formatTime(state.timeRemainingMs);
+    timeOutput.textContent = formatTime(state.timeRemainingMs);
+
+    if (now - lastSaveAt >= 1000) {
+      lastSaveAt = now;
+      persistProgress();
+    }
+  };
+
+  const persistProgress = (): void => {
+    if (state.hasStarted && !state.isGameOver && !saveGame(state)) {
+      status.textContent = 'Progress could not be saved in this browser session.';
+    }
+  };
+
+  const finishSavedProgress = (): void => {
+    availableSave = null;
+    if (!clearSavedGame()) {
+      status.textContent += ' Saved progress could not be cleared.';
+    }
+  };
+
+  const beginTimer = (): void => {
+    lastTickAt = document.hidden || state.isPaused ? null : Date.now();
+    if (timerHandle === undefined && !state.isPaused) {
+      timerHandle = window.setInterval(tick, 200);
+    }
+  };
+
   root.addEventListener('click', (event: MouseEvent) => {
     const target = event.target;
     if (!(target instanceof Element)) {
+      return;
+    }
+
+    if (target.closest('[data-start-game]')) {
+      availableSave = null;
+      startNewGame(state);
+      status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
+      beginTimer();
+      render();
+      persistProgress();
+      return;
+    }
+
+    if (target.closest('[data-continue-game]') && availableSave) {
+      restoreSavedGame(state, availableSave);
+      availableSave = null;
+      stopTimer();
+      status.textContent = 'Your saved run is paused. Press Resume when ready.';
+      render();
+      persistProgress();
+      return;
+    }
+
+    if (target.closest('[data-pause]') && state.hasStarted && !state.isGameOver) {
+      if (state.isPaused) {
+        state.isPaused = false;
+        status.textContent = 'Run resumed.';
+        beginTimer();
+      } else {
+        tick();
+        if (state.isGameOver) {
+          return;
+        }
+        state.isPaused = true;
+        status.textContent = 'Run paused.';
+        stopTimer();
+      }
+      render();
+      persistProgress();
       return;
     }
 
@@ -293,7 +482,35 @@ export function mountGameScreen(root: HTMLElement): void {
       if (ingredient && addIngredient(state, ingredient.id)) {
         status.textContent = `${ingredient.name} added to the cauldron.`;
         render();
+        persistProgress();
       }
+      return;
+    }
+
+    if (target.closest('[data-brew]') && !brewButton.disabled) {
+      tick();
+      if (state.isGameOver) {
+        return;
+      }
+
+      const result = brewCauldron(state);
+      if (result.status === 'success') {
+        status.textContent = `Brew successful! +200 score and +10 seconds (maximum 02:30). New recipe: ${state.activeRecipe?.name ?? 'ready'}.`;
+      } else if (result.status === 'failure') {
+        status.textContent = state.isGameOver
+          ? 'The brew failed. No lives remain; your run is over.'
+          : `The brew failed. 1 life lost; ${state.lives} remaining.`;
+      } else {
+        return;
+      }
+
+      if (state.isGameOver) {
+        stopTimer();
+        finishSavedProgress();
+      } else {
+        persistProgress();
+      }
+      render();
       return;
     }
 
@@ -302,6 +519,17 @@ export function mountGameScreen(root: HTMLElement): void {
       clearCauldron(state);
       status.textContent = `${spentIngredients} ingredient${spentIngredients === 1 ? '' : 's'} discarded. Shelf stock is unchanged.`;
       render();
+      persistProgress();
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      tick();
+      lastTickAt = null;
+      persistProgress();
+    } else if (state.hasStarted && !state.isGameOver && !state.isPaused) {
+      lastTickAt = Date.now();
     }
   });
 

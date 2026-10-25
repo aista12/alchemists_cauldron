@@ -15,15 +15,13 @@ Work is delivered incrementally through story branches and task pull requests:
 - **Level 2 — Extended game:** additional game features.
 - **Level 3 — Full game:** the complete feature set.
 
-The current playable features are **US 1.1 — Ingredient Shelf & Cauldron** and
-**US 1.2 — Cauldron Parameter Bars**. A new visit starts with random stock for
-the first six ingredients. Add ingredients to the four-slot cauldron, in order,
-or empty it to make room; discarded ingredients remain spent. Three animated
-bars show the summed temperature, density, and magic power, with zero-centered
-scales for signed values and green highlights inside the target zones. The
-current fixed target is the Medium recipe **Acid Spark**: temperature 17..27,
-density 18..28, and magic power 29..39. Random recipe selection and brewing are
-part of US 1.3.
+The current playable features are **US 1.1 — Ingredient Shelf & Cauldron**,
+**US 1.2 — Cauldron Parameter Bars**, and **US 1.3 — Recipe & Brewing Check**.
+Start a run to receive random stock for the first six ingredients and a random
+Medium recipe. Add ingredients to the four-slot cauldron, watch the summed
+temperature, density, and magic power move on the animated bars, and brew when
+the values match the recipe. A successful brew awards points and time; a failed
+brew costs a life. Stock spent on ingredients is not refunded.
 
 ## Repository structure
 
@@ -38,10 +36,10 @@ part of US 1.3.
 │   ├── main.ts               # Minimal TypeScript entry point
 │   ├── assets/               # Individual game assets
 │   ├── data/ingredients.ts   # Ordered ingredient catalogue and values
-│   ├── data/recipes.ts       # Current recipe and target ranges
-│   ├── logic/cauldron.ts     # Ingredient rules and value calculation
-│   ├── state/game-state.ts   # Shelf stock and cauldron state
-│   ├── storage/              # Save-data helpers for later stories
+│   ├── data/recipes.ts       # Fixed recipe pool and Level 1 settings
+│   ├── logic/cauldron.ts     # Ingredient, parameter, and brew rules
+│   ├── state/game-state.ts   # Run, stock, recipe, score, time, and lives
+│   ├── storage/game-save.ts  # Validated local run saves and restoration
 │   ├── styles/main.css       # Room, shelf, cauldron, and parameter-bar styles
 │   └── ui/                   # DOM rendering and ingredient icons
 ├── eslint.config.js          # TypeScript and JavaScript lint rules
@@ -63,6 +61,46 @@ the first six entries; the last two remain available for later levels.
 | 6   | Essence of the Void |         −20 |     −10 |         +40 |
 | 7   | Phoenix Feather     |         +50 |     −10 |         +30 |
 | 8   | Toad Slime          |          +5 |     +30 |           0 |
+
+## Level 1 recipes and controls
+
+Level 1 uses **Medium** recipes, a tolerance of **±8**, a four-ingredient
+cauldron, three lives, and a 150-second time limit. Each recipe target range is
+checked inclusively after expanding both ends by the tolerance. A successful
+brew awards **200 points**, adds **10 seconds** up to 150 seconds, clears the
+cauldron, and selects another Medium recipe. A failed brew clears the cauldron
+and costs one life. Ingredients used in either result stay spent.
+
+To play, select **Start Game**, add ingredients using their shelf cards, and
+press **Brew** to check the current mixture. **Empty cauldron** discards the
+current mixture without refunding stock. Use **Pause** and **Resume** to stop
+and restart the timer. Active runs are saved in local storage; **Continue Game**
+restores a valid unfinished run in a paused state. The timer also pauses while
+the browser tab is hidden. Invalid or unavailable saved data is handled without
+crashing the game.
+
+| #   | Difficulty | Recipe name    | Temperature | Density | Magic Power |
+| --- | ---------- | -------------- | :---------: | :-----: | :---------: |
+| 1   | Easy       | Moon Mist      |   32..42    | 12..22  |   17..27    |
+| 2   | Easy       | Root Bloom     |    2..12    | 24..34  |   15..25    |
+| 3   | Easy       | Frost Steam    |    2..12    |  7..17  |   19..29    |
+| 4   | Easy       | Quiet Swirl    |  -28..-18   | 19..29  |   17..27    |
+| 5   | Easy       | Bright Dew     |   27..37    | 32..42  |   25..35    |
+| 6   | Easy       | Snow Dust      |   -16..-6   | 28..38  |   29..39    |
+| 7   | Medium     | Acid Spark     |   17..27    | 18..28  |   29..39    |
+| 8   | Medium     | Void Ember     |    0..10    |  0..10  |   45..55    |
+| 9   | Medium     | Heavy Acid     |    0..10    | 29..39  |   25..35    |
+| 10  | Medium     | Frost Acid     |   -13..-3   | 13..23  |   31..41    |
+| 11  | Medium     | Dusty Void     |   -13..-3   |  0..10  |   47..57    |
+| 12  | Medium     | Dragon Void    |   25..35    |  1..11  |   55..65    |
+| 13  | Medium     | Rooted Night   |   -18..-8   | 14..24  |   55..65    |
+| 14  | Hard       | Phoenix Pulse  |   57..67    |  0..10  |   37..47    |
+| 15  | Hard       | Slime Crown    |    -5..5    | 45..55  |    3..13    |
+| 16  | Hard       | Void Flame     |   25..35    |  0..10  |   60..70    |
+| 17  | Hard       | Acid Bog       |   10..20    | 39..49  |   17..27    |
+| 18  | Hard       | Frozen Ash     |   27..37    |  0..10  |   39..49    |
+| 19  | Hard       | Triple Eclipse |  -20..-10   | 19..29  |   60..70    |
+| 20  | Hard       | Ember Soup     |   62..72    | 24..34  |   37..47    |
 
 ## Getting started
 
