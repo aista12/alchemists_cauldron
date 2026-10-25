@@ -17,15 +17,16 @@ Work is delivered incrementally through story branches and task pull requests:
 
 The current playable features are **US 1.1 — Ingredient Shelf & Cauldron**,
 **US 1.2 — Cauldron Parameter Bars**, **US 1.3 — Recipe & Brewing Check**,
-**US 1.4 — Timer & Game Over**, **US 1.5 — Pause**, and **US 1.6 — Leaderboard**.
-Start a run to receive
-random stock for the first six ingredients and a random Medium recipe. Add
-ingredients to the four-slot cauldron, watch the summed temperature, density,
-and magic power move on the animated bars, and brew when the values match the
-recipe. A successful brew awards points and time; a failed brew costs a life.
-Stock spent on ingredients is not refunded. Scores that qualify for the Top 10
-can be saved with a validated player name; view and clear the local leaderboard
-from the menu or Game Over screen.
+**US 1.4 — Timer & Game Over**, **US 1.5 — Pause**, **US 1.6 — Leaderboard**,
+**US 2.1 — Difficulty Selection**, and **US 2.2 — Auto-save & Continue Game**.
+Choose a difficulty and start a run to receive random stock for its available
+ingredients and a recipe of that difficulty. Add ingredients to the cauldron,
+watch the summed temperature, density, and magic power move on the animated
+bars, and brew when the values match the recipe. A successful brew awards the
+difficulty's points and time bonus; a failed brew costs a life. Stock spent on
+ingredients is not refunded. Scores qualifying for the per-difficulty Top 10
+can be saved with a validated player name. Unfinished runs are saved locally
+and can be continued in a paused state.
 
 ## Repository structure
 
@@ -40,7 +41,7 @@ from the menu or Game Over screen.
 │   ├── main.ts               # Minimal TypeScript entry point
 │   ├── assets/               # Individual game assets
 │   ├── data/ingredients.ts   # Ordered ingredient catalogue and values
-│   ├── data/recipes.ts       # Fixed recipe pool and Level 1 settings
+│   ├── data/recipes.ts       # Fixed recipe pool and difficulty settings
 │   ├── logic/cauldron.ts     # Ingredient, parameter, and brew rules
 │   ├── logic/leaderboard.ts  # Player-name validation, ranking, and date formatting
 │   ├── state/game-state.ts   # Run, stock, recipe, score, time, and lives
@@ -54,8 +55,8 @@ from the menu or Game Over screen.
 └── vite.config.ts            # Vite development and production settings
 ```
 
-The complete ingredient catalogue is kept in the specified order. Level 1 uses
-the first six entries; the last two remain available for later levels.
+The complete ingredient catalogue is kept in the specified order. Each
+difficulty uses the first N ingredients listed in its settings.
 
 | #   | Ingredient          | Temperature | Density | Magic Power |
 | --- | ------------------- | ----------: | ------: | ----------: |
@@ -77,9 +78,21 @@ brew awards **200 points**, adds **10 seconds** up to 150 seconds, clears the
 cauldron, and selects another Medium recipe. A failed brew clears the cauldron
 and costs one life. Ingredients used in either result stay spent.
 
-To play, select **Start Game**, add ingredients using their shelf cards, and
-press **Brew** to check the current mixture. **Empty cauldron** discards the
-current mixture without refunding stock. The timer is shown as **MM:SS** and a
+## Difficulty settings
+
+The selected difficulty controls the shelf size, cauldron capacity, time,
+recipe tolerance, lives, brew score, time bonus, and reaction count.
+
+| Difficulty | Shelf ingredients | Cauldron capacity | Start time | Tolerance | Lives | Score per brew | Time bonus | Reactions |
+| ---------- | ----------------: | ----------------: | ---------: | --------: | ----: | -------------: | ---------: | --------: |
+| Easy       |                 4 |                 5 |      180 s |       ±12 |     5 |            150 |       15 s |         0 |
+| Medium     |                 6 |                 4 |      150 s |        ±8 |     3 |            200 |       10 s |         0 |
+| Hard       |                 8 |                 3 |      150 s |        ±5 |     3 |            300 |       10 s |         2 |
+
+To play, open **Settings**, choose Easy, Medium, or Hard, then select
+**Start Game**. Use **Help** for the rules. Add ingredients using their shelf
+cards, and press **Brew** to check the current mixture. **Empty cauldron**
+discards the current mixture without refunding stock. The timer is shown as **MM:SS** and a
 remaining-time bar; it pulses red below 15 seconds. Use **Pause**, then
 **Resume** or **Exit to Menu** in the pause dialog. A hidden browser tab pauses
 the run automatically. The **Game Over** screen reports the end reason and
@@ -88,10 +101,11 @@ zero, or when all shelf stock is gone and the cauldron is empty. Active runs
 are saved in local storage; **Continue Game** restores a valid unfinished run
 in a paused state. Invalid or unavailable saved data is handled without
 crashing the game. Open **Leaderboard** from the menu or Game Over screen to
-view the Top 10 by score. If your result qualifies, submit a 2–15 character
-name using letters, digits, spaces, `_` or `-`. Equal scores keep the earlier
-result above the later one. **Clear Leaderboard** asks for confirmation before
-removing the local results.
+view the Top 10 for the selected difficulty. Each saved result includes its
+difficulty. If your result qualifies, submit a 2–15 character name using
+letters, digits, spaces, `_` or `-`. Equal scores keep the earlier result above
+the later one. **Clear Leaderboard** asks for confirmation before removing that
+difficulty's local results.
 
 | #   | Difficulty | Recipe name    | Temperature | Density | Magic Power |
 | --- | ---------- | -------------- | :---------: | :-----: | :---------: |

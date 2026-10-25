@@ -1,10 +1,5 @@
-import {
-  CAULDRON_CAPACITY,
-  SHELF_INGREDIENTS,
-  type Ingredient,
-  type IngredientId,
-} from '../data/ingredients';
-import { STARTING_LIVES, STARTING_TIME_SECONDS, type Recipe } from '../data/recipes';
+import { getShelfIngredients, type Ingredient, type IngredientId } from '../data/ingredients';
+import { DIFFICULTY_SETTINGS, type Difficulty, type Recipe } from '../data/recipes';
 import {
   addIngredient,
   calculateCauldron,
@@ -121,8 +116,12 @@ function renderShelfCard(ingredient: Ingredient, stock: number, blocked: boolean
   `;
 }
 
-function renderCauldronSlot(ingredientId: IngredientId | undefined, index: number): string {
-  const ingredient = SHELF_INGREDIENTS.find((item) => item.id === ingredientId);
+function renderCauldronSlot(
+  ingredientId: IngredientId | undefined,
+  index: number,
+  difficulty: Difficulty,
+): string {
+  const ingredient = getShelfIngredients(difficulty).find((item) => item.id === ingredientId);
 
   if (!ingredient) {
     return `<div class="cauldron-slot cauldron-slot--empty" aria-label="Empty cauldron slot ${index + 1}"><span>${index + 1}</span></div>`;
@@ -205,7 +204,7 @@ export function mountGameScreen(root: HTMLElement): void {
             <span class="cauldron-bowl__foot cauldron-bowl__foot--right"></span>
           </div>
           <section class="parameter-bars" data-parameter-bars aria-label="Active recipe and cauldron values">
-            <div class="run-hud" data-run-hud hidden>
+            <div class="run-hud" data-run-hud>
               <div class="run-hud__timer" data-timer>
                 <span class="run-hud__item">TIME <output data-time>02:30</output></span>
                 <div
@@ -214,14 +213,14 @@ export function mountGameScreen(root: HTMLElement): void {
                   role="progressbar"
                   aria-label="Time remaining"
                   aria-valuemin="0"
-                  aria-valuemax="${STARTING_TIME_SECONDS}"
-                  aria-valuenow="${STARTING_TIME_SECONDS}"
+                  aria-valuemax="${DIFFICULTY_SETTINGS[state.difficulty].startTimeSeconds}"
+                  aria-valuenow="0"
                 >
                   <span data-time-bar></span>
                 </div>
               </div>
               <span class="run-hud__item">SCORE <output data-score>0</output></span>
-              <span class="run-hud__item run-hud__lives" data-lives aria-label="Lives: 3">♥ ♥ ♥</span>
+              <span class="run-hud__item run-hud__lives" data-lives aria-label="Lives: 3"></span>
             </div>
             <h2 class="parameter-bars__heading">
               <span>Current recipe</span>
@@ -230,16 +229,26 @@ export function mountGameScreen(root: HTMLElement): void {
             ${PARAMETER_BARS.map((definition) => renderParameterBar(definition, null)).join('')}
             <div class="recipe-counter" data-recipe-counter>
               <span class="recipe-counter__label">Ingredients</span>
-              <span class="recipe-counter__count" data-counter>0 <i>/</i> ${CAULDRON_CAPACITY}</span>
+              <span class="recipe-counter__count" data-counter>0 <i>/</i> ${DIFFICULTY_SETTINGS[state.difficulty].cauldronCapacity}</span>
             </div>
           </section>
           <p class="workbench__hint" data-status aria-live="polite">Begin a run to receive your recipe.</p>
           <div class="run-start-actions" data-run-start-actions>
-            <button class="start-game-button" type="button" data-start-game>Start Game</button>
-            <button class="continue-game-button" type="button" data-continue-game hidden>Continue Game</button>
-            <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-leaderboard>
-              Leaderboard
-            </button>
+            <div class="run-start-actions__primary">
+              <button class="start-game-button" type="button" data-start-game>Start Game</button>
+              <button class="continue-game-button" type="button" data-continue-game hidden>Continue Game</button>
+            </div>
+            <div class="run-start-actions__secondary">
+              <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-settings>
+                Settings
+              </button>
+              <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-help>
+                Help
+              </button>
+              <button class="run-dialog__button run-dialog__button--secondary" type="button" data-open-leaderboard>
+                Leaderboard
+              </button>
+            </div>
           </div>
           <button class="pause-game-button" type="button" data-pause hidden>Pause</button>
           <button class="brew-button" type="button" data-brew hidden disabled>Brew</button>
@@ -325,6 +334,7 @@ export function mountGameScreen(root: HTMLElement): void {
               <tr>
                 <th scope="col">Rank</th>
                 <th scope="col">Name</th>
+                <th scope="col">Difficulty</th>
                 <th scope="col">Score</th>
                 <th scope="col">Date</th>
               </tr>
@@ -351,7 +361,7 @@ export function mountGameScreen(root: HTMLElement): void {
       >
         <span class="run-dialog__eyebrow">CLEAR RESULTS</span>
         <h2 id="clear-leaderboard-title">Clear leaderboard?</h2>
-        <p id="clear-leaderboard-description">This will remove all saved Top 10 results from this browser.</p>
+        <p id="clear-leaderboard-description">This will remove all saved Top 10 results for this difficulty from this browser.</p>
         <div class="run-dialog__actions">
           <button class="run-dialog__button run-dialog__button--secondary" type="button" data-cancel-clear>
             Keep results
@@ -359,6 +369,39 @@ export function mountGameScreen(root: HTMLElement): void {
           <button class="run-dialog__button" type="button" data-confirm-clear>Clear Leaderboard</button>
         </div>
       </section>
+    </dialog>
+    <dialog class="run-dialog settings-dialog" data-settings-dialog aria-labelledby="settings-title">
+      <span class="run-dialog__eyebrow">PREPARE YOUR ATELIER</span>
+      <h2 id="settings-title">Choose Difficulty</h2>
+      <p class="settings-dialog__intro">Your choice sets the ingredients and rules for the next run.</p>
+      <div class="difficulty-options">
+        ${(['Easy', 'Medium', 'Hard'] as const)
+          .map(
+            (difficulty) => `
+              <button class="difficulty-option" type="button" data-select-difficulty="${difficulty}" aria-pressed="${state.difficulty === difficulty}">
+                <span class="difficulty-option__name">${difficulty}</span>
+                <span class="difficulty-option__details" data-difficulty-summary></span>
+              </button>
+            `,
+          )
+          .join('')}
+      </div>
+      <div class="run-dialog__actions">
+        <button class="run-dialog__button" type="button" data-close-settings>Done</button>
+      </div>
+    </dialog>
+    <dialog class="run-dialog help-dialog" data-help-dialog aria-labelledby="help-title">
+      <span class="run-dialog__eyebrow">FIELD GUIDE</span>
+      <h2 id="help-title">How to Play</h2>
+      <ul class="help-dialog__rules">
+        <li>Choose a difficulty in Settings, then start a run.</li>
+        <li>Add ingredients to change the cauldron values and match the recipe ranges.</li>
+        <li>Brew before time runs out. Success earns points and time; failure costs a life.</li>
+        <li>Pause to stop the timer. Your unfinished run can be continued later.</li>
+      </ul>
+      <div class="run-dialog__actions">
+        <button class="run-dialog__button" type="button" data-close-help>Back</button>
+      </div>
     </dialog>
   `;
 
@@ -369,6 +412,11 @@ export function mountGameScreen(root: HTMLElement): void {
   const runStartActions = root.querySelector<HTMLDivElement>('[data-run-start-actions]');
   const startButton = root.querySelector<HTMLButtonElement>('[data-start-game]');
   const continueButton = root.querySelector<HTMLButtonElement>('[data-continue-game]');
+  const settingsDialog = root.querySelector<HTMLDialogElement>('[data-settings-dialog]');
+  const helpDialog = root.querySelector<HTMLDialogElement>('[data-help-dialog]');
+  const difficultyOptions = Array.from(
+    root.querySelectorAll<HTMLButtonElement>('[data-select-difficulty]'),
+  );
   const pauseButton = root.querySelector<HTMLButtonElement>('[data-pause]');
   const brewButton = root.querySelector<HTMLButtonElement>('[data-brew]');
   const status = root.querySelector<HTMLParagraphElement>('[data-status]');
@@ -398,6 +446,7 @@ export function mountGameScreen(root: HTMLElement): void {
   const clearConfirmPanel = root.querySelector<HTMLElement>('[data-clear-confirm-panel]');
   const gameOverReason = root.querySelector<HTMLParagraphElement>('[data-game-over-reason]');
   const finalScoreOutput = root.querySelector<HTMLOutputElement>('[data-final-score]');
+  const leaderboardTitle = root.querySelector<HTMLHeadingElement>('#leaderboard-title');
 
   if (
     !shelf ||
@@ -407,6 +456,9 @@ export function mountGameScreen(root: HTMLElement): void {
     !runStartActions ||
     !startButton ||
     !continueButton ||
+    !settingsDialog ||
+    !helpDialog ||
+    difficultyOptions.length !== 3 ||
     !pauseButton ||
     !brewButton ||
     !status ||
@@ -435,7 +487,8 @@ export function mountGameScreen(root: HTMLElement): void {
     !leaderboardPanel ||
     !clearConfirmPanel ||
     !gameOverReason ||
-    !finalScoreOutput
+    !finalScoreOutput ||
+    !leaderboardTitle
   ) {
     throw new Error('The alchemy screen is missing required elements.');
   }
@@ -454,6 +507,9 @@ export function mountGameScreen(root: HTMLElement): void {
 
   const savedGameResult = readSavedGame();
   let availableSave = savedGameResult.status === 'available' ? savedGameResult.game : null;
+  if (availableSave) {
+    state = createGameState(availableSave.difficulty);
+  }
   let lastSaveAt = 0;
   let endTime: number | null = null;
   let shouldAskForName = false;
@@ -473,21 +529,23 @@ export function mountGameScreen(root: HTMLElement): void {
       const row = document.createElement('tr');
       const rankCell = document.createElement('td');
       const nameCell = document.createElement('td');
+      const difficultyCell = document.createElement('td');
       const scoreCell = document.createElement('td');
       const dateCell = document.createElement('td');
 
       rankCell.textContent = `${index + 1}`;
       nameCell.textContent = entry.name;
+      difficultyCell.textContent = entry.difficulty;
       scoreCell.textContent = `${entry.score}`;
       dateCell.textContent = formatLeaderboardDate(entry.timestamp);
-      row.append(rankCell, nameCell, scoreCell, dateCell);
+      row.append(rankCell, nameCell, difficultyCell, scoreCell, dateCell);
       leaderboardRows.append(row);
     });
     leaderboardEmpty.hidden = entries.length > 0;
   };
 
   const refreshLeaderboard = (): void => {
-    const result = getLeaderboard();
+    const result = getLeaderboard(state.difficulty);
     if (result.status === 'unavailable') {
       renderLeaderboardEntries([]);
       leaderboardMessage.textContent =
@@ -508,6 +566,7 @@ export function mountGameScreen(root: HTMLElement): void {
     }
     leaderboardPanel.hidden = false;
     clearConfirmPanel.hidden = true;
+    leaderboardTitle.textContent = `Top 10 · ${state.difficulty}`;
     refreshLeaderboard();
     if (!leaderboardDialog.open) {
       leaderboardDialog.showModal();
@@ -515,9 +574,11 @@ export function mountGameScreen(root: HTMLElement): void {
   };
 
   const render = (): void => {
+    const settings = DIFFICULTY_SETTINGS[state.difficulty];
+    const shelfIngredients = getShelfIngredients(state.difficulty);
     const hasActiveRun = state.hasStarted && !state.isGameOver;
     const isPlaying = hasActiveRun && !state.isPaused;
-    const isFull = state.cauldronIngredients.length >= CAULDRON_CAPACITY;
+    const isFull = state.cauldronIngredients.length >= settings.cauldronCapacity;
     const currentValues = calculateCauldron(state.cauldronIngredients);
     const recipe = state.activeRecipe;
 
@@ -547,13 +608,17 @@ export function mountGameScreen(root: HTMLElement): void {
     });
 
     recipeName.textContent = recipe ? `${recipe.name} · ${recipe.difficulty}` : 'Begin your run';
-    shelf.innerHTML = SHELF_INGREDIENTS.map((ingredient) =>
-      renderShelfCard(ingredient, state.shelfStock[ingredient.id] ?? 0, isFull || !isPlaying),
+    shelf.innerHTML = state.hasStarted
+      ? shelfIngredients
+          .map((ingredient) =>
+            renderShelfCard(ingredient, state.shelfStock[ingredient.id] ?? 0, isFull || !isPlaying),
+          )
+          .join('')
+      : '';
+    cauldron.innerHTML = Array.from({ length: settings.cauldronCapacity }, (_, index) =>
+      renderCauldronSlot(state.cauldronIngredients[index], index, state.difficulty),
     ).join('');
-    cauldron.innerHTML = Array.from({ length: CAULDRON_CAPACITY }, (_, index) =>
-      renderCauldronSlot(state.cauldronIngredients[index], index),
-    ).join('');
-    counter.innerHTML = `${state.cauldronIngredients.length} <i>/</i> ${CAULDRON_CAPACITY}`;
+    counter.innerHTML = `${state.cauldronIngredients.length} <i>/</i> ${settings.cauldronCapacity}`;
     recipeCounter.classList.toggle('recipe-counter--full', isFull);
     clearButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
     clearButton.hidden = !isPlaying || state.cauldronIngredients.length === 0;
@@ -569,28 +634,45 @@ export function mountGameScreen(root: HTMLElement): void {
     pauseButton.setAttribute('aria-pressed', `${state.isPaused}`);
     brewButton.hidden = !hasActiveRun;
     brewButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
-    runHud.hidden = !state.hasStarted;
+    runHud.hidden = false;
     timeOutput.value = formatTime(state.timeRemainingMs);
     timeOutput.textContent = formatTime(state.timeRemainingMs);
     const timeRatio = Math.max(
       0,
-      Math.min(1, state.timeRemainingMs / (STARTING_TIME_SECONDS * 1000)),
+      Math.min(1, state.timeRemainingMs / (settings.startTimeSeconds * 1000)),
     );
     timeBar.style.width = `${timeRatio * 100}%`;
+    timeProgress.setAttribute('aria-valuemax', `${settings.startTimeSeconds}`);
     timeProgress.setAttribute('aria-valuenow', `${Math.ceil(state.timeRemainingMs / 1000)}`);
     timer.classList.toggle('run-hud__timer--urgent', state.timeRemainingMs < 15_000);
     scoreOutput.value = `${state.score}`;
     scoreOutput.textContent = `${state.score}`;
-    livesOutput.textContent = Array.from({ length: STARTING_LIVES }, (_, index) =>
+    livesOutput.hidden = !state.hasStarted;
+    livesOutput.textContent = Array.from({ length: settings.startingLives }, (_, index) =>
       index < state.lives ? '♥' : '♡',
     ).join(' ');
     livesOutput.setAttribute('aria-label', `Lives: ${state.lives}`);
     recipeCounter.setAttribute(
       'aria-label',
-      `Ingredients: ${state.cauldronIngredients.length} / ${CAULDRON_CAPACITY}`,
+      `Ingredients: ${state.cauldronIngredients.length} / ${settings.cauldronCapacity}`,
     );
-    shelfMessage.textContent = isFull ? 'The cauldron is full. Empty it before adding more.' : '';
+    shelfMessage.textContent = isFull
+      ? 'The cauldron is full. Empty it before adding more.'
+      : state.hasStarted
+        ? ''
+        : `${state.difficulty} selected. Open Settings to change difficulty.`;
     shelf.classList.toggle('ingredient-grid--blocked', isFull);
+    difficultyOptions.forEach((button) => {
+      const difficulty = button.dataset.selectDifficulty;
+      if (difficulty === 'Easy' || difficulty === 'Medium' || difficulty === 'Hard') {
+        const optionSettings = DIFFICULTY_SETTINGS[difficulty];
+        button.setAttribute('aria-pressed', `${difficulty === state.difficulty}`);
+        const details = button.querySelector<HTMLSpanElement>('[data-difficulty-summary]');
+        if (details) {
+          details.textContent = `${optionSettings.shelfSize} ingredients · ${optionSettings.cauldronCapacity} slots · ${optionSettings.startTimeSeconds}s · ±${optionSettings.tolerance} · ${optionSettings.startingLives} lives · ${optionSettings.scorePerBrew} pts · +${optionSettings.timeBonusSeconds}s · ${optionSettings.reactionCount} reactions`;
+        }
+      }
+    });
     pausePanel.hidden = state.isGameOver;
     gameOverPanel.hidden = !state.isGameOver;
     runDialog.setAttribute(
@@ -622,13 +704,15 @@ export function mountGameScreen(root: HTMLElement): void {
   };
 
   const updateTimeDisplay = (): void => {
+    const settings = DIFFICULTY_SETTINGS[state.difficulty];
     timeOutput.value = formatTime(state.timeRemainingMs);
     timeOutput.textContent = formatTime(state.timeRemainingMs);
     const timeRatio = Math.max(
       0,
-      Math.min(1, state.timeRemainingMs / (STARTING_TIME_SECONDS * 1000)),
+      Math.min(1, state.timeRemainingMs / (settings.startTimeSeconds * 1000)),
     );
     timeBar.style.width = `${timeRatio * 100}%`;
+    timeProgress.setAttribute('aria-valuemax', `${settings.startTimeSeconds}`);
     timeProgress.setAttribute('aria-valuenow', `${Math.ceil(state.timeRemainingMs / 1000)}`);
     timer.classList.toggle('run-hud__timer--urgent', state.timeRemainingMs < 15_000);
   };
@@ -654,7 +738,7 @@ export function mountGameScreen(root: HTMLElement): void {
     stopTimer();
     status.textContent = GAME_OVER_MESSAGES[reason];
     finishSavedProgress();
-    const leaderboard = getLeaderboard();
+    const leaderboard = getLeaderboard(state.difficulty);
     shouldAskForName =
       leaderboard.status === 'unavailable' ||
       qualifiesForLeaderboard(state.score, leaderboard.entries);
@@ -670,7 +754,9 @@ export function mountGameScreen(root: HTMLElement): void {
 
   const hasNoIngredients = (): boolean =>
     state.cauldronIngredients.length === 0 &&
-    SHELF_INGREDIENTS.every((ingredient) => (state.shelfStock[ingredient.id] ?? 0) === 0);
+    getShelfIngredients(state.difficulty).every(
+      (ingredient) => (state.shelfStock[ingredient.id] ?? 0) === 0,
+    );
 
   const updateTimer = (): void => {
     if (!state.hasStarted || state.isGameOver || state.isPaused || endTime === null) {
@@ -736,7 +822,7 @@ export function mountGameScreen(root: HTMLElement): void {
       shouldAskForName = false;
       scoreWasSaved = false;
       scoreFeedback = '';
-      startNewGame(state);
+      startNewGame(state, state.difficulty);
       status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
       beginTimer();
       render();
@@ -774,7 +860,7 @@ export function mountGameScreen(root: HTMLElement): void {
       stopTimer();
       endTime = null;
       availableSave = null;
-      state = createGameState();
+      state = createGameState(state.difficulty);
       status.textContent = 'Run ended. Start a new game when you are ready.';
       if (!clearSavedGame()) {
         status.textContent = 'Saved progress could not be cleared.';
@@ -788,7 +874,7 @@ export function mountGameScreen(root: HTMLElement): void {
       shouldAskForName = false;
       scoreWasSaved = false;
       scoreFeedback = '';
-      startNewGame(state);
+      startNewGame(state, state.difficulty);
       status.textContent = `${state.activeRecipe?.name ?? 'A new recipe'} awaits your ingredients.`;
       beginTimer();
       render();
@@ -798,6 +884,37 @@ export function mountGameScreen(root: HTMLElement): void {
 
     if (target.closest('[data-open-leaderboard]')) {
       openLeaderboard(state.isGameOver);
+      return;
+    }
+
+    if (target.closest('[data-open-settings]') && !state.hasStarted) {
+      settingsDialog.showModal();
+      return;
+    }
+
+    if (target.closest('[data-close-settings]')) {
+      settingsDialog.close();
+      return;
+    }
+
+    if (target.closest('[data-open-help]') && !state.hasStarted) {
+      helpDialog.showModal();
+      return;
+    }
+
+    if (target.closest('[data-close-help]')) {
+      helpDialog.close();
+      return;
+    }
+
+    const difficultyButton = target.closest<HTMLButtonElement>('[data-select-difficulty]');
+    if (difficultyButton && !state.hasStarted) {
+      const difficulty = difficultyButton.dataset.selectDifficulty;
+      if (difficulty === 'Easy' || difficulty === 'Medium' || difficulty === 'Hard') {
+        state.difficulty = difficulty;
+        status.textContent = `${difficulty} difficulty selected. Start a run when ready.`;
+        render();
+      }
       return;
     }
 
@@ -823,7 +940,7 @@ export function mountGameScreen(root: HTMLElement): void {
     }
 
     if (target.closest('[data-confirm-clear]')) {
-      if (clearLeaderboard()) {
+      if (clearLeaderboard(state.difficulty)) {
         leaderboardMessage.textContent = 'Leaderboard cleared.';
         refreshLeaderboard();
         leaderboardMessage.textContent = 'Leaderboard cleared.';
@@ -843,7 +960,7 @@ export function mountGameScreen(root: HTMLElement): void {
       if (state.isGameOver || state.isPaused) {
         return;
       }
-      const ingredient = SHELF_INGREDIENTS.find(
+      const ingredient = getShelfIngredients(state.difficulty).find(
         (item) => item.id === ingredientButton.dataset.ingredientId,
       );
       if (ingredient && addIngredient(state, ingredient.id)) {
@@ -862,7 +979,9 @@ export function mountGameScreen(root: HTMLElement): void {
 
       const result = brewCauldron(state);
       if (result.status === 'success') {
-        status.textContent = `Brew successful! +200 score and +10 seconds (maximum 02:30). New recipe: ${state.activeRecipe?.name ?? 'ready'}.`;
+        const settings = DIFFICULTY_SETTINGS[state.difficulty];
+        const maximumTime = formatTime(settings.startTimeSeconds * 1000);
+        status.textContent = `Brew successful! +${settings.scorePerBrew} score and +${settings.timeBonusSeconds} seconds (maximum ${maximumTime}). New recipe: ${state.activeRecipe?.name ?? 'ready'}.`;
       } else if (result.status === 'failure') {
         status.textContent = state.isGameOver
           ? 'The brew failed. No lives remain; your run is over.'
@@ -918,7 +1037,7 @@ export function mountGameScreen(root: HTMLElement): void {
     }
 
     playerNameError.textContent = '';
-    const result = saveLeaderboardEntry(name, state.score);
+    const result = saveLeaderboardEntry(name, state.score, state.difficulty);
     if (result.status === 'invalid-name') {
       playerNameError.textContent = 'Enter 2–15 characters using letters, numbers, spaces, _ or -.';
       playerNameInput.focus();
@@ -969,6 +1088,13 @@ export function mountGameScreen(root: HTMLElement): void {
       }
     } else if (state.isPaused || state.isGameOver) {
       render();
+    }
+  });
+
+  window.addEventListener('pagehide', () => {
+    if (state.hasStarted && !state.isGameOver && !state.isPaused) {
+      updateTimer();
+      persistProgress();
     }
   });
 

@@ -6,8 +6,10 @@ import {
   sortLeaderboard,
   type LeaderboardEntry,
 } from '../logic/leaderboard';
+import type { Difficulty } from '../data/recipes';
 
-const LEADERBOARD_KEY = 'alchemists-cauldron:leaderboard';
+const leaderboardKey = (difficulty: Difficulty): string =>
+  `alchemists-cauldron:leaderboard:${difficulty.toLowerCase()}`;
 
 export type LeaderboardReadResult =
   | { status: 'available'; entries: LeaderboardEntry[]; recovered: boolean }
@@ -19,11 +21,11 @@ export type LeaderboardWriteResult =
   | { status: 'not-qualified' }
   | { status: 'unavailable' };
 
-function readLeaderboard(): LeaderboardReadResult {
+function readLeaderboard(difficulty: Difficulty): LeaderboardReadResult {
   let storedValue: string | null;
 
   try {
-    storedValue = window.localStorage.getItem(LEADERBOARD_KEY);
+    storedValue = window.localStorage.getItem(leaderboardKey(difficulty));
   } catch {
     return { status: 'unavailable', entries: [] };
   }
@@ -44,7 +46,10 @@ function readLeaderboard(): LeaderboardReadResult {
     return { status: 'available', entries: [], recovered: true };
   }
 
-  const validEntries = parsedValue.filter(isLeaderboardEntry);
+  const validEntries = parsedValue.filter(
+    (entry): entry is LeaderboardEntry =>
+      isLeaderboardEntry(entry) && entry.difficulty === difficulty,
+  );
   const sortedEntries = sortLeaderboard(validEntries).slice(0, LEADERBOARD_LIMIT);
 
   return {
@@ -54,13 +59,14 @@ function readLeaderboard(): LeaderboardReadResult {
   };
 }
 
-export function getLeaderboard(): LeaderboardReadResult {
-  return readLeaderboard();
+export function getLeaderboard(difficulty: Difficulty): LeaderboardReadResult {
+  return readLeaderboard(difficulty);
 }
 
 export function saveLeaderboardEntry(
   name: string,
   score: number,
+  difficulty: Difficulty,
   timestamp = Date.now(),
 ): LeaderboardWriteResult {
   const trimmedName = name.trim();
@@ -69,7 +75,7 @@ export function saveLeaderboardEntry(
     return { status: 'invalid-name' };
   }
 
-  const current = readLeaderboard();
+  const current = readLeaderboard(difficulty);
 
   if (current.status === 'unavailable') {
     return { status: 'unavailable' };
@@ -79,11 +85,11 @@ export function saveLeaderboardEntry(
     return { status: 'not-qualified' };
   }
 
-  const entry: LeaderboardEntry = { name: trimmedName, score, timestamp };
+  const entry: LeaderboardEntry = { name: trimmedName, score, timestamp, difficulty };
   const entries = sortLeaderboard([...current.entries, entry]).slice(0, LEADERBOARD_LIMIT);
 
   try {
-    window.localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(entries));
+    window.localStorage.setItem(leaderboardKey(difficulty), JSON.stringify(entries));
   } catch {
     return { status: 'unavailable' };
   }
@@ -91,9 +97,9 @@ export function saveLeaderboardEntry(
   return { status: 'saved', entries, recovered: current.recovered };
 }
 
-export function clearLeaderboard(): boolean {
+export function clearLeaderboard(difficulty: Difficulty): boolean {
   try {
-    window.localStorage.removeItem(LEADERBOARD_KEY);
+    window.localStorage.removeItem(leaderboardKey(difficulty));
   } catch {
     return false;
   }

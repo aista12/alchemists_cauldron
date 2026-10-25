@@ -1,15 +1,9 @@
-import { SHELF_INGREDIENTS, type IngredientId } from '../data/ingredients';
-import {
-  RECIPES,
-  STARTING_LIVES,
-  STARTING_TIME_SECONDS,
-  type Difficulty,
-  type Recipe,
-} from '../data/recipes';
+import { getShelfIngredients, type IngredientId } from '../data/ingredients';
+import { DIFFICULTY_SETTINGS, RECIPES, type Difficulty, type Recipe } from '../data/recipes';
 import type { GameState } from '../state/game-state';
 
 const SAVE_KEY = 'alchemists-cauldron:run';
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 
 export interface SavedGame {
   shelfStock: Partial<Record<IngredientId, number>>;
@@ -17,8 +11,9 @@ export interface SavedGame {
   difficulty: Difficulty;
   activeRecipe: Recipe;
   score: number;
-  timeRemainingMs: number;
+  timeLeft: number;
   lives: number;
+  status: 'playing' | 'paused';
 }
 
 export type SavedGameReadResult =
@@ -31,30 +26,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isIngredientId(value: unknown): value is IngredientId {
-  return SHELF_INGREDIENTS.some((ingredient) => ingredient.id === value);
+function isIngredientId(value: unknown, difficulty: Difficulty): value is IngredientId {
+  return getShelfIngredients(difficulty).some((ingredient) => ingredient.id === value);
 }
 
 function isDifficulty(value: unknown): value is Difficulty {
   return value === 'Easy' || value === 'Medium' || value === 'Hard';
 }
 
-function isShelfStock(value: unknown): value is Partial<Record<IngredientId, number>> {
+function isShelfStock(
+  value: unknown,
+  difficulty: Difficulty,
+): value is Partial<Record<IngredientId, number>> {
+  const ingredients = getShelfIngredients(difficulty);
+
   return (
     isRecord(value) &&
-    Object.keys(value).length === SHELF_INGREDIENTS.length &&
-    SHELF_INGREDIENTS.every((ingredient) => {
+    Object.keys(value).length === ingredients.length &&
+    ingredients.every((ingredient) => {
       const stock = value[ingredient.id];
       return typeof stock === 'number' && Number.isInteger(stock) && stock >= 0 && stock <= 15;
     })
   );
 }
 
-function isIngredientList(value: unknown): value is IngredientId[] {
+function isIngredientList(value: unknown, difficulty: Difficulty): value is IngredientId[] {
   return (
     Array.isArray(value) &&
-    value.length <= 4 &&
-    value.every((ingredientId) => isIngredientId(ingredientId))
+    value.length <= DIFFICULTY_SETTINGS[difficulty].cauldronCapacity &&
+    value.every((ingredientId) => isIngredientId(ingredientId, difficulty))
   );
 }
 
@@ -63,38 +63,44 @@ function parseSavedGame(value: unknown): SavedGame | null {
     !isRecord(value) ||
     value.version !== SAVE_VERSION ||
     !isDifficulty(value.difficulty) ||
-    typeof value.activeRecipeId !== 'string' ||
     typeof value.score !== 'number' ||
     !Number.isInteger(value.score) ||
     value.score < 0 ||
-    typeof value.timeRemainingMs !== 'number' ||
-    !Number.isInteger(value.timeRemainingMs) ||
-    value.timeRemainingMs <= 0 ||
-    value.timeRemainingMs > STARTING_TIME_SECONDS * 1000 ||
+    typeof value.timeLeft !== 'number' ||
+    !Number.isInteger(value.timeLeft) ||
+    value.timeLeft <= 0 ||
+    value.timeLeft > DIFFICULTY_SETTINGS[value.difficulty].startTimeSeconds * 1000 ||
     typeof value.lives !== 'number' ||
     !Number.isInteger(value.lives) ||
     value.lives < 1 ||
-    value.lives > STARTING_LIVES
+    value.lives > DIFFICULTY_SETTINGS[value.difficulty].startingLives ||
+    (value.status !== 'playing' && value.status !== 'paused')
   ) {
     return null;
   }
 
+  const savedRecipe = value.activeRecipe;
   const shelfStock = value.shelfStock;
   const cauldronIngredients = value.cauldronIngredients;
 
-  if (!isShelfStock(shelfStock) || !isIngredientList(cauldronIngredients)) {
+  if (
+    !isRecord(savedRecipe) ||
+    typeof savedRecipe.id !== 'string' ||
+    !isShelfStock(shelfStock, value.difficulty) ||
+    !isIngredientList(cauldronIngredients, value.difficulty)
+  ) {
     return null;
   }
 
   const activeRecipe = RECIPES.find(
-    (recipe) => recipe.id === value.activeRecipeId && recipe.difficulty === value.difficulty,
+    (recipe) => recipe.id === savedRecipe.id && recipe.difficulty === value.difficulty,
   );
 
   if (!activeRecipe) {
     return null;
   }
 
-  const spentStockIsValid = SHELF_INGREDIENTS.every((ingredient) => {
+  const spentStockIsValid = getShelfIngredients(value.difficulty).every((ingredient) => {
     const spentInCauldron = cauldronIngredients.filter(
       (ingredientId) => ingredientId === ingredient.id,
     ).length;
@@ -111,8 +117,9 @@ function parseSavedGame(value: unknown): SavedGame | null {
     difficulty: value.difficulty,
     activeRecipe,
     score: value.score,
-    timeRemainingMs: value.timeRemainingMs,
+    timeLeft: value.timeLeft,
     lives: value.lives,
+    status: value.status,
   };
 }
 
@@ -153,7 +160,7 @@ export function saveGame(state: GameState): boolean {
 
   const shelfStock: Partial<Record<IngredientId, number>> = {};
 
-  for (const ingredient of SHELF_INGREDIENTS) {
+  for (const ingredient of getShelfIngredients(state.difficulty)) {
     const stock = state.shelfStock[ingredient.id];
     if (stock === undefined) {
       return false;
@@ -166,10 +173,11 @@ export function saveGame(state: GameState): boolean {
     shelfStock,
     cauldronIngredients: state.cauldronIngredients,
     difficulty: state.difficulty,
-    activeRecipeId: state.activeRecipe.id,
+    activeRecipe: state.activeRecipe,
     score: state.score,
-    timeRemainingMs: state.timeRemainingMs,
+    timeLeft: state.timeRemainingMs,
     lives: state.lives,
+    status: state.isPaused ? 'paused' : 'playing',
   };
 
   try {
@@ -201,6 +209,6 @@ export function restoreSavedGame(state: GameState, game: SavedGame): void {
   state.isGameOver = false;
   state.gameOverReason = null;
   state.score = game.score;
-  state.timeRemainingMs = game.timeRemainingMs;
+  state.timeRemainingMs = game.timeLeft;
   state.lives = game.lives;
 }

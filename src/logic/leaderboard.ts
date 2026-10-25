@@ -1,9 +1,12 @@
+import type { Difficulty } from '../data/recipes';
+
 export const LEADERBOARD_LIMIT = 10;
 
 export interface LeaderboardEntry {
   name: string;
   score: number;
   timestamp: number;
+  difficulty: Difficulty;
 }
 
 const PLAYER_NAME_PATTERN = /^[\p{L}\d _-]+$/u;
@@ -31,7 +34,8 @@ export function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
     typeof entry.timestamp === 'number' &&
     Number.isSafeInteger(entry.timestamp) &&
     entry.timestamp >= 0 &&
-    Number.isFinite(new Date(entry.timestamp).getTime())
+    Number.isFinite(new Date(entry.timestamp).getTime()) &&
+    (entry.difficulty === 'Easy' || entry.difficulty === 'Medium' || entry.difficulty === 'Hard')
   );
 }
 

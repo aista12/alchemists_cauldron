@@ -1,3 +1,5 @@
+import { DIFFICULTY_SETTINGS, type Difficulty } from './recipes';
+
 export const INGREDIENTS = [
   {
     id: 'dragon-tears',
@@ -76,3 +78,7 @@ export const SHELF_INGREDIENTS = INGREDIENTS.slice(
   0,
   LEVEL_ONE_INGREDIENT_COUNT,
 ) as readonly Ingredient[];
+
+export function getShelfIngredients(difficulty: Difficulty): readonly Ingredient[] {
+  return INGREDIENTS.slice(0, DIFFICULTY_SETTINGS[difficulty].shelfSize);
+}

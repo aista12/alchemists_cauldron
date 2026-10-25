@@ -1,8 +1,7 @@
-import { SHELF_INGREDIENTS, type IngredientId } from '../data/ingredients';
+import { getShelfIngredients, type IngredientId } from '../data/ingredients';
 import {
+  DIFFICULTY_SETTINGS,
   LEVEL_ONE_DIFFICULTY,
-  STARTING_LIVES,
-  STARTING_TIME_SECONDS,
   type Difficulty,
   type Recipe,
   pickRandomRecipe,
@@ -24,17 +23,23 @@ export interface GameState {
 
 export type RandomSource = () => number;
 
-export function createStock(random: RandomSource = Math.random): GameState['shelfStock'] {
+export function createStock(
+  difficulty: Difficulty,
+  random: RandomSource = Math.random,
+): GameState['shelfStock'] {
   return Object.fromEntries(
-    SHELF_INGREDIENTS.map((ingredient) => [ingredient.id, Math.floor(random() * 14) + 2]),
+    getShelfIngredients(difficulty).map((ingredient) => [
+      ingredient.id,
+      Math.floor(random() * 14) + 2,
+    ]),
   );
 }
 
-export function createGameState(): GameState {
+export function createGameState(difficulty: Difficulty = LEVEL_ONE_DIFFICULTY): GameState {
   return {
     shelfStock: {},
     cauldronIngredients: [],
-    difficulty: LEVEL_ONE_DIFFICULTY,
+    difficulty,
     activeRecipe: null,
     hasStarted: false,
     isPaused: false,
@@ -42,20 +47,25 @@ export function createGameState(): GameState {
     gameOverReason: null,
     score: 0,
     timeRemainingMs: 0,
-    lives: STARTING_LIVES,
+    lives: DIFFICULTY_SETTINGS[difficulty].startingLives,
   };
 }
 
-export function startNewGame(state: GameState, random: RandomSource = Math.random): void {
-  state.shelfStock = createStock(random);
+export function startNewGame(
+  state: GameState,
+  difficulty: Difficulty = state.difficulty,
+  random: RandomSource = Math.random,
+): void {
+  const settings = DIFFICULTY_SETTINGS[difficulty];
+  state.shelfStock = createStock(difficulty, random);
   state.cauldronIngredients = [];
-  state.difficulty = LEVEL_ONE_DIFFICULTY;
+  state.difficulty = difficulty;
   state.activeRecipe = pickRandomRecipe(state.difficulty, random);
   state.hasStarted = true;
   state.isPaused = false;
   state.isGameOver = false;
   state.gameOverReason = null;
   state.score = 0;
-  state.timeRemainingMs = STARTING_TIME_SECONDS * 1000;
-  state.lives = STARTING_LIVES;
+  state.timeRemainingMs = settings.startTimeSeconds * 1000;
+  state.lives = settings.startingLives;
 }

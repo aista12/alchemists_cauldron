@@ -184,6 +184,50 @@ export const STARTING_LIVES = 3;
 export const SCORE_PER_BREW = 200;
 export const TIME_BONUS_SECONDS = 10;
 
+export interface DifficultySettings {
+  shelfSize: number;
+  cauldronCapacity: number;
+  startTimeSeconds: number;
+  tolerance: number;
+  startingLives: number;
+  scorePerBrew: number;
+  timeBonusSeconds: number;
+  reactionCount: number;
+}
+
+export const DIFFICULTY_SETTINGS: Readonly<Record<Difficulty, DifficultySettings>> = {
+  Easy: {
+    shelfSize: 4,
+    cauldronCapacity: 5,
+    startTimeSeconds: 180,
+    tolerance: 12,
+    startingLives: 5,
+    scorePerBrew: 150,
+    timeBonusSeconds: 15,
+    reactionCount: 0,
+  },
+  Medium: {
+    shelfSize: 6,
+    cauldronCapacity: 4,
+    startTimeSeconds: STARTING_TIME_SECONDS,
+    tolerance: LEVEL_ONE_RECIPE_TOLERANCE,
+    startingLives: STARTING_LIVES,
+    scorePerBrew: SCORE_PER_BREW,
+    timeBonusSeconds: TIME_BONUS_SECONDS,
+    reactionCount: 0,
+  },
+  Hard: {
+    shelfSize: 8,
+    cauldronCapacity: 3,
+    startTimeSeconds: 150,
+    tolerance: 5,
+    startingLives: 3,
+    scorePerBrew: 300,
+    timeBonusSeconds: 10,
+    reactionCount: 2,
+  },
+};
+
 export function getRecipesByDifficulty(difficulty: Difficulty): readonly Recipe[] {
   return RECIPES.filter((recipe) => recipe.difficulty === difficulty);
 }

@@ -1006,8 +1006,28 @@ button:focus-visible {
 
 .run-start-actions {
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
   gap: 0.55rem;
+}
+
+.run-start-actions__primary,
+.run-start-actions__secondary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.run-start-actions__primary {
+  width: 100%;
+}
+
+.run-start-actions__secondary .run-dialog__button {
+  min-width: 8rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.82rem;
 }
 
 .start-game-button,
@@ -1127,6 +1147,75 @@ button:focus-visible {
   border-color: #879083;
   background: linear-gradient(180deg, #748477, #4c5e53);
   color: #fff8e9;
+}
+
+.settings-dialog {
+  width: min(54rem, calc(100vw - 2rem));
+  max-height: min(88vh, 52rem);
+  overflow: auto;
+}
+
+.settings-dialog__intro {
+  margin: -0.55rem 0 1.25rem;
+  color: #68695f;
+}
+
+.difficulty-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.difficulty-option {
+  display: grid;
+  min-height: 9rem;
+  align-content: start;
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px solid #b6a477;
+  border-radius: 0.35rem;
+  background: linear-gradient(145deg, #fffdf5, #eee4ce);
+  color: #3d433e;
+  text-align: left;
+  cursor: pointer;
+}
+
+.difficulty-option[aria-pressed='true'] {
+  border: 2px solid #9e8045;
+  background: linear-gradient(145deg, #fff4d4, #e8d39f);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 76%),
+    0 0 0.8rem rgb(175 142 76 / 38%);
+}
+
+.difficulty-option__name {
+  color: #3d5147;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.25rem;
+}
+
+.difficulty-option__details {
+  color: #666355;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.help-dialog {
+  width: min(38rem, calc(100vw - 2rem));
+}
+
+.help-dialog__rules {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1.5rem;
+  padding-left: 1.35rem;
+  color: #55594f;
+  line-height: 1.5;
+  text-align: left;
+}
+
+[data-lives][hidden] {
+  display: none;
 }
 
 .run-dialog__score {
@@ -2466,6 +2555,35 @@ button:focus-visible {
     padding: 1rem 0.65rem;
   }
 
+  .settings-dialog {
+    padding: 1.25rem 1rem;
+  }
+
+  .difficulty-options {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem;
+  }
+
+  .difficulty-option {
+    min-height: 0;
+    grid-template-columns: minmax(4.5rem, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem;
+  }
+
+  .difficulty-option__details {
+    font-size: 0.72rem;
+  }
+
+  .run-start-actions__secondary .run-dialog__button {
+    min-width: 7rem;
+  }
+
+  .difficulty-option {
+    grid-template-columns: minmax(4rem, auto) minmax(0, 1fr);
+  }
+
   .leaderboard-table-wrap {
     overflow-x: hidden;
   }
@@ -2489,17 +2607,24 @@ button:focus-visible {
 
   .leaderboard-table th:first-child,
   .leaderboard-table td:first-child {
-    width: 2.5rem;
+    width: 2.1rem;
   }
 
   .leaderboard-table th:nth-child(3),
   .leaderboard-table td:nth-child(3) {
-    width: 3.5rem;
+    width: 4rem;
+  }
+
+  .leaderboard-table th:nth-child(4),
+  .leaderboard-table td:nth-child(4) {
+    width: 3rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
   .leaderboard-table th:last-child,
   .leaderboard-table td:last-child {
-    width: 7.25rem;
-    white-space: nowrap;
+    width: 5.5rem;
+    white-space: normal;
   }
 }

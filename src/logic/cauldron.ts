@@ -1,16 +1,5 @@
-import {
-  CAULDRON_CAPACITY,
-  INGREDIENTS,
-  SHELF_INGREDIENTS,
-  type IngredientId,
-} from '../data/ingredients';
-import {
-  LEVEL_ONE_RECIPE_TOLERANCE,
-  SCORE_PER_BREW,
-  STARTING_TIME_SECONDS,
-  TIME_BONUS_SECONDS,
-  pickRandomRecipe,
-} from '../data/recipes';
+import { INGREDIENTS, getShelfIngredients, type IngredientId } from '../data/ingredients';
+import { DIFFICULTY_SETTINGS, LEVEL_ONE_RECIPE_TOLERANCE, pickRandomRecipe } from '../data/recipes';
 import type { GameState } from '../state/game-state';
 
 export interface CauldronValues {
@@ -71,11 +60,13 @@ export function brewCauldron(state: GameState, random: () => number = Math.rando
     return { status: 'unavailable', values };
   }
 
-  if (checkRecipe(values, state.activeRecipe)) {
-    state.score += SCORE_PER_BREW;
+  const settings = DIFFICULTY_SETTINGS[state.difficulty];
+
+  if (checkRecipe(values, state.activeRecipe, settings.tolerance)) {
+    state.score += settings.scorePerBrew;
     state.timeRemainingMs = Math.min(
-      STARTING_TIME_SECONDS * 1000,
-      state.timeRemainingMs + TIME_BONUS_SECONDS * 1000,
+      settings.startTimeSeconds * 1000,
+      state.timeRemainingMs + settings.timeBonusSeconds * 1000,
     );
     state.activeRecipe = pickRandomRecipe(state.difficulty, random);
     state.cauldronIngredients = [];
@@ -96,10 +87,10 @@ export function addIngredient(state: GameState, ingredientId: IngredientId): boo
     !state.hasStarted ||
     state.isPaused ||
     state.isGameOver ||
-    state.cauldronIngredients.length >= CAULDRON_CAPACITY ||
+    state.cauldronIngredients.length >= DIFFICULTY_SETTINGS[state.difficulty].cauldronCapacity ||
     stock === undefined ||
     stock <= 0 ||
-    !SHELF_INGREDIENTS.some((ingredient) => ingredient.id === ingredientId)
+    !getShelfIngredients(state.difficulty).some((ingredient) => ingredient.id === ingredientId)
   ) {
     return false;
   }
