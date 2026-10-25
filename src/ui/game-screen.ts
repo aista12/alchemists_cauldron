@@ -4,11 +4,78 @@ import {
   type Ingredient,
   type IngredientId,
 } from '../data/ingredients';
-import { addIngredient, clearCauldron } from '../logic/cauldron';
+import { ACTIVE_RECIPE } from '../data/recipes';
+import {
+  addIngredient,
+  calculateCauldron,
+  clearCauldron,
+  type CauldronValues,
+} from '../logic/cauldron';
 import { createGameState } from '../state/game-state';
 import { renderIngredientIcon } from './ingredient-icons';
 
 const signed = (value: number): string => (value > 0 ? `+${value}` : `${value}`);
+
+interface ParameterBarDefinition {
+  key: keyof CauldronValues;
+  label: string;
+  target: { min: number; max: number };
+  domain: { min: number; max: number };
+}
+
+const PARAMETER_BARS: readonly ParameterBarDefinition[] = [
+  {
+    key: 'temperature',
+    label: 'Temperature',
+    target: ACTIVE_RECIPE.temperature,
+    domain: { min: -100, max: 100 },
+  },
+  {
+    key: 'density',
+    label: 'Density',
+    target: ACTIVE_RECIPE.density,
+    domain: { min: -80, max: 80 },
+  },
+  {
+    key: 'magicPower',
+    label: 'Magic Power',
+    target: ACTIVE_RECIPE.magicPower,
+    domain: { min: 0, max: 160 },
+  },
+];
+
+function toTrackPosition(value: number, domain: ParameterBarDefinition['domain']): number {
+  return Math.min(100, Math.max(0, ((value - domain.min) / (domain.max - domain.min)) * 100));
+}
+
+function renderParameterBar(definition: ParameterBarDefinition): string {
+  const zeroPosition = toTrackPosition(0, definition.domain);
+  const targetStart = toTrackPosition(definition.target.min, definition.domain);
+  const targetEnd = toTrackPosition(definition.target.max, definition.domain);
+
+  return `
+    <div
+      class="parameter-bar"
+      data-parameter="${definition.key}"
+      role="group"
+      aria-label="${definition.label}"
+      style="--zero-position: ${zeroPosition}%; --target-start: ${targetStart}%; --target-width: ${targetEnd - targetStart}%; --current-position: ${zeroPosition}%"
+    >
+      <div class="parameter-bar__heading">
+        <span class="parameter-bar__name">${definition.label}</span>
+        <span class="parameter-bar__values">
+          <output class="parameter-bar__current" data-current-value aria-label="Current value">0</output>
+          <span class="parameter-bar__target-label">Target ${signed(definition.target.min)}–${signed(definition.target.max)}</span>
+        </span>
+      </div>
+      <div class="parameter-bar__track" aria-hidden="true">
+        <span class="parameter-bar__zero"></span>
+        <span class="parameter-bar__target"></span>
+        <span class="parameter-bar__marker"></span>
+      </div>
+    </div>
+  `;
+}
 
 function renderShelfCard(ingredient: Ingredient, stock: number, blocked: boolean): string {
   const empty = stock <= 0;
@@ -111,6 +178,13 @@ export function mountGameScreen(root: HTMLElement): void {
             <span class="cauldron-bowl__foot cauldron-bowl__foot--left"></span>
             <span class="cauldron-bowl__foot cauldron-bowl__foot--right"></span>
           </div>
+          <section class="parameter-bars" data-parameter-bars aria-label="Cauldron parameters">
+            <h2 class="parameter-bars__heading">
+              <span>Cauldron values</span>
+              <span class="parameter-bars__recipe">${ACTIVE_RECIPE.name} · ${ACTIVE_RECIPE.difficulty}</span>
+            </h2>
+            ${PARAMETER_BARS.map(renderParameterBar).join('')}
+          </section>
           <p class="workbench__hint" data-status aria-live="polite">Choose ingredients from your shelf to begin.</p>
           <div class="recipe-counter">
             <span class="recipe-counter__label">Ingredients</span>
@@ -146,13 +220,49 @@ export function mountGameScreen(root: HTMLElement): void {
   const clearButton = root.querySelector<HTMLButtonElement>('[data-clear]');
   const status = root.querySelector<HTMLParagraphElement>('[data-status]');
   const shelfMessage = root.querySelector<HTMLParagraphElement>('[data-shelf-message]');
+  const parameterBars = root.querySelector<HTMLElement>('[data-parameter-bars]');
 
-  if (!shelf || !cauldron || !counter || !clearButton || !status || !shelfMessage) {
+  if (
+    !shelf ||
+    !cauldron ||
+    !counter ||
+    !clearButton ||
+    !status ||
+    !shelfMessage ||
+    !parameterBars
+  ) {
     throw new Error('The alchemy screen is missing required elements.');
   }
 
+  const parameterBarElements = PARAMETER_BARS.map((definition) => {
+    const bar = parameterBars.querySelector<HTMLDivElement>(`[data-parameter="${definition.key}"]`);
+    const currentValue = bar?.querySelector<HTMLOutputElement>('[data-current-value]');
+
+    if (!bar || !currentValue) {
+      throw new Error(`The ${definition.label} bar is missing required elements.`);
+    }
+
+    return { definition, bar, currentValue };
+  });
+
   const render = (): void => {
     const isFull = state.cauldronIngredients.length >= CAULDRON_CAPACITY;
+    const currentValues = calculateCauldron(state.cauldronIngredients);
+
+    parameterBarElements.forEach(({ definition, bar, currentValue }) => {
+      const value = currentValues[definition.key];
+      const inTargetRange = value >= definition.target.min && value <= definition.target.max;
+
+      currentValue.value = `${value}`;
+      currentValue.textContent = signed(value);
+      bar.style.setProperty('--current-position', `${toTrackPosition(value, definition.domain)}%`);
+      bar.classList.toggle('parameter-bar--in-range', inTargetRange);
+      bar.setAttribute(
+        'aria-label',
+        `${definition.label}: ${value}. Target range ${definition.target.min} to ${definition.target.max}.`,
+      );
+    });
+
     shelf.innerHTML = SHELF_INGREDIENTS.map((ingredient) =>
       renderShelfCard(ingredient, state.shelfStock[ingredient.id] ?? 0, isFull),
     ).join('');

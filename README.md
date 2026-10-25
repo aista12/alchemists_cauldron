@@ -15,11 +15,15 @@ Work is delivered incrementally through story branches and task pull requests:
 - **Level 2 — Extended game:** additional game features.
 - **Level 3 — Full game:** the complete feature set.
 
-The current playable feature is **US 1.1 — Ingredient Shelf & Cauldron**. A new
-visit starts with random stock for the first six ingredients. Add ingredients to
-the four-slot cauldron, in order, or empty it to make room; discarded ingredients
-remain spent. The ingredient shelf sits to the left of a cauldron resting on the
-atelier's worktable.
+The current playable features are **US 1.1 — Ingredient Shelf & Cauldron** and
+**US 1.2 — Cauldron Parameter Bars**. A new visit starts with random stock for
+the first six ingredients. Add ingredients to the four-slot cauldron, in order,
+or empty it to make room; discarded ingredients remain spent. Three animated
+bars show the summed temperature, density, and magic power, with zero-centered
+scales for signed values and green highlights inside the target zones. The
+current fixed target is the Medium recipe **Acid Spark**: temperature 17..27,
+density 18..28, and magic power 29..39. Random recipe selection and brewing are
+part of US 1.3.
 
 ## Repository structure
 
@@ -34,10 +38,11 @@ atelier's worktable.
 │   ├── main.ts               # Minimal TypeScript entry point
 │   ├── assets/               # Individual game assets
 │   ├── data/ingredients.ts   # Ordered ingredient catalogue and values
-│   ├── logic/cauldron.ts     # Ingredient and cauldron rules
+│   ├── data/recipes.ts       # Current recipe and target ranges
+│   ├── logic/cauldron.ts     # Ingredient rules and value calculation
 │   ├── state/game-state.ts   # Shelf stock and cauldron state
 │   ├── storage/              # Save-data helpers for later stories
-│   ├── styles/main.css       # Room, window view, shelf, and cauldron styles
+│   ├── styles/main.css       # Room, shelf, cauldron, and parameter-bar styles
 │   └── ui/                   # DOM rendering and ingredient icons
 ├── eslint.config.js          # TypeScript and JavaScript lint rules
 ├── package.json              # Scripts and dependencies

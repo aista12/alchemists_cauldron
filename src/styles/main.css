@@ -443,12 +443,12 @@ a:focus-visible {
 .workbench {
   position: absolute;
   z-index: 2;
-  top: 50%;
+  top: calc(50% - 3.7rem);
   left: 50%;
   display: grid;
   width: min(31rem, 44vw);
   justify-items: center;
-  transform: translate(-50%, -27%);
+  transform: translateX(-50%);
 }
 
 .workbench__label {
@@ -572,6 +572,142 @@ a:focus-visible {
 .cauldron-bowl__steam--three {
   left: 4.55rem;
   animation-delay: -1.5s;
+}
+
+.parameter-bars {
+  display: grid;
+  width: min(18rem, 100%);
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+  padding: 0.4rem 0.55rem 0.5rem;
+  border: 1px solid rgb(255 248 221 / 47%);
+  background: rgb(47 58 49 / 88%);
+  box-shadow: 0 0.25rem 0.75rem rgb(36 31 24 / 24%);
+  color: #fff7e4;
+}
+
+.parameter-bars__heading,
+.parameter-bar__heading,
+.parameter-bar__values {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.parameter-bars__heading {
+  gap: 0.5rem;
+  margin: 0;
+  color: #f0d798;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 0.58rem;
+}
+
+.parameter-bars__recipe {
+  color: rgb(255 247 224 / 68%);
+  font-family: Arial, sans-serif;
+  font-size: 0.48rem;
+}
+
+.parameter-bar__heading {
+  min-width: 0;
+  gap: 0.4rem;
+  font-size: 0.53rem;
+  line-height: 1.2;
+}
+
+.parameter-bar__name {
+  color: rgb(255 247 224 / 85%);
+}
+
+.parameter-bar__values {
+  flex: 0 0 auto;
+  gap: 0.42rem;
+  white-space: nowrap;
+}
+
+.parameter-bar__current {
+  min-width: 1.4rem;
+  color: #f0d798;
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.parameter-bar__target-label {
+  color: rgb(255 247 224 / 62%);
+  font-size: 0.48rem;
+}
+
+.parameter-bar__track {
+  position: relative;
+  height: 0.36rem;
+  margin-top: 0.18rem;
+  border: 1px solid rgb(255 248 221 / 28%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4d5148, #77705c 50%, #4d5148);
+}
+
+.parameter-bar__zero,
+.parameter-bar__target,
+.parameter-bar__marker {
+  position: absolute;
+}
+
+.parameter-bar__zero {
+  z-index: 1;
+  top: -0.12rem;
+  bottom: -0.12rem;
+  left: var(--zero-position);
+  width: 1px;
+  background: rgb(255 255 255 / 62%);
+}
+
+.parameter-bar__target {
+  top: 0;
+  bottom: 0;
+  left: var(--target-start);
+  width: var(--target-width);
+  border-right: 1px solid rgb(255 241 194 / 78%);
+  border-left: 1px solid rgb(255 241 194 / 78%);
+  background: linear-gradient(180deg, #c9ae69, #a98b4f);
+  transition:
+    background-color 250ms ease,
+    box-shadow 250ms ease;
+}
+
+.parameter-bar__marker {
+  z-index: 2;
+  top: 50%;
+  left: var(--current-position);
+  width: 0.58rem;
+  height: 0.58rem;
+  border: 1px solid #fff4d4;
+  border-radius: 50%;
+  background: #f8e7ae;
+  box-shadow: 0 0 0.3rem rgb(255 238 181 / 82%);
+  transform: translate(-50%, -50%);
+  transition:
+    left 450ms cubic-bezier(0.22, 0.7, 0.25, 1),
+    background-color 250ms ease,
+    box-shadow 250ms ease;
+}
+
+.parameter-bar--in-range .parameter-bar__current {
+  color: #a9e4a7;
+}
+
+.parameter-bar--in-range .parameter-bar__target {
+  border-color: #b8efb2;
+  background: linear-gradient(180deg, #8bc57d, #4f9853);
+  box-shadow: 0 0 0.45rem rgb(123 229 128 / 60%);
+}
+
+.parameter-bar--in-range .parameter-bar__marker {
+  border-color: #e4ffe0;
+  background: #8fe08a;
+  box-shadow:
+    0 0 0.25rem #c5ffc0,
+    0 0 0.7rem rgb(98 255 112 / 92%);
 }
 
 .workbench__hint {
@@ -951,9 +1087,34 @@ a:focus-visible {
   }
 
   .workbench {
-    top: 50%;
+    top: calc(50% - 3.7rem);
     left: 50%;
     width: 66vw;
+    transform: translateX(-50%);
+  }
+
+  .parameter-bars {
+    width: calc(100vw - 34vw);
+    max-width: none;
+    justify-self: start;
+    margin-left: 17vw;
+    padding-inline: 0.4rem;
+  }
+
+  .parameter-bars__heading {
+    font-size: 0.54rem;
+  }
+
+  .parameter-bars__recipe {
+    font-size: 0.44rem;
+  }
+
+  .parameter-bar__heading {
+    font-size: 0.5rem;
+  }
+
+  .parameter-bar__target-label {
+    font-size: 0.44rem;
   }
 
   .workbench__label {
@@ -1176,7 +1337,13 @@ a:focus-visible {
   }
 
   .workbench {
-    transform: translate(-50%, -27%);
+    transform: translateX(-50%);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+  .parameter-bars {
+    transform: translateX(5rem);
   }
 }
 
