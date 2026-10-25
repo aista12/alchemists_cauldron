@@ -1,12 +1,7 @@
 import { getShelfIngredients, type Ingredient, type IngredientId } from '../data/ingredients';
 import { DIFFICULTY_SETTINGS, type Difficulty, type Recipe } from '../data/recipes';
-import {
-  addIngredient,
-  calculateCauldron,
-  brewCauldron,
-  clearCauldron,
-  type CauldronValues,
-} from '../logic/cauldron';
+import { addIngredient, brewCauldron, pourOut, type CauldronValues } from '../logic/cauldron';
+import { applyNewReactionEffects, calculateCauldronWithReactions } from '../logic/reactions';
 import {
   formatLeaderboardDate,
   isValidPlayerName,
@@ -18,7 +13,8 @@ import { clearLeaderboard, getLeaderboard, saveLeaderboardEntry } from '../stora
 import { clearSavedGame, readSavedGame, restoreSavedGame, saveGame } from '../storage/game-save';
 import { renderIngredientIcon } from './ingredient-icons';
 
-const signed = (value: number): string => (value > 0 ? `+${value}` : `${value}`);
+const signed = (value: number): string =>
+  value > 0 ? `+${value}` : value < 0 ? `−${Math.abs(value)}` : '0';
 
 function formatTime(milliseconds: number): string {
   const totalSeconds = Math.ceil(milliseconds / 1000);
@@ -92,7 +88,12 @@ function renderParameterBar(definition: ParameterBarDefinition, recipe: Recipe |
   `;
 }
 
-function renderShelfCard(ingredient: Ingredient, stock: number, blocked: boolean): string {
+function renderShelfCard(
+  ingredient: Ingredient,
+  stock: number,
+  blocked: boolean,
+  order: number,
+): string {
   const empty = stock <= 0;
   const disabled = empty || blocked;
 
@@ -101,16 +102,24 @@ function renderShelfCard(ingredient: Ingredient, stock: number, blocked: boolean
       class="ingredient-card ingredient-card--${ingredient.id}${empty ? ' ingredient-card--empty' : ''}"
       type="button"
       data-ingredient-id="${ingredient.id}"
+      data-shelf-order="${order}"
+      draggable="${!disabled}"
+      aria-describedby="ingredient-tooltip-${ingredient.id}"
       aria-label="${ingredient.name}, temperature ${signed(ingredient.temperature)}, density ${signed(ingredient.density)}, magic power ${signed(ingredient.magicPower)}, stock ${stock}"
       ${disabled ? 'disabled' : ''}
     >
       <span class="ingredient-card__stock" aria-label="Stock ${stock}">${stock}</span>
       <span class="ingredient-card__icon">${empty ? '' : renderIngredientIcon(ingredient.icon)}</span>
       <span class="ingredient-card__name">${ingredient.name}</span>
-      <span class="ingredient-card__values">
+      <span class="ingredient-card__values" hidden>
         <span title="Temperature"><i class="value-mark value-mark--temperature">T</i>${signed(ingredient.temperature)}</span>
         <span title="Density"><i class="value-mark value-mark--density">D</i>${signed(ingredient.density)}</span>
         <span title="Magic Power"><i class="value-mark value-mark--magic">✦</i>${signed(ingredient.magicPower)}</span>
+      </span>
+      <span class="ingredient-tooltip" id="ingredient-tooltip-${ingredient.id}" role="tooltip" hidden>
+        <span><i class="value-mark value-mark--temperature">T</i> Temperature ${signed(ingredient.temperature)}</span>
+        <span><i class="value-mark value-mark--density">D</i> Density ${signed(ingredient.density)}</span>
+        <span><i class="value-mark value-mark--magic">✦</i> Magic Power ${signed(ingredient.magicPower)}</span>
       </span>
     </button>
   `;
@@ -203,6 +212,7 @@ export function mountGameScreen(root: HTMLElement): void {
             <span class="cauldron-bowl__foot cauldron-bowl__foot--left"></span>
             <span class="cauldron-bowl__foot cauldron-bowl__foot--right"></span>
           </div>
+          <span class="brew-explosion" aria-hidden="true"></span>
           <section class="parameter-bars" data-parameter-bars aria-label="Active recipe and cauldron values">
             <div class="run-hud" data-run-hud>
               <div class="run-hud__timer" data-timer>
@@ -253,7 +263,7 @@ export function mountGameScreen(root: HTMLElement): void {
           <button class="pause-game-button" type="button" data-pause hidden>Pause</button>
           <button class="brew-button" type="button" data-brew hidden disabled>Brew</button>
           <div class="cauldron-slots" data-cauldron aria-live="polite"></div>
-          <button class="clear-button" type="button" data-clear disabled>Empty cauldron</button>
+          <button class="clear-button" type="button" data-pour-out disabled>Pour Out (−10 s)</button>
         </section>
 
         <section class="ingredient-shelf" aria-label="Ingredient shelf">
@@ -395,8 +405,9 @@ export function mountGameScreen(root: HTMLElement): void {
       <h2 id="help-title">How to Play</h2>
       <ul class="help-dialog__rules">
         <li>Choose a difficulty in Settings, then start a run.</li>
-        <li>Add ingredients to change the cauldron values and match the recipe ranges.</li>
-        <li>Brew before time runs out. Success earns points and time; failure costs a life.</li>
+        <li>Click or drag ingredients into the cauldron to match the recipe ranges.</li>
+        <li>During play, press 1–8 to add a shelf ingredient, B to brew, O to pour out, or P/Escape to pause.</li>
+        <li>Success earns points and time; failure costs a life. Reactions can alter values and spend time or lives.</li>
         <li>Pause to stop the timer. Your unfinished run can be continued later.</li>
       </ul>
       <div class="run-dialog__actions">
@@ -408,7 +419,7 @@ export function mountGameScreen(root: HTMLElement): void {
   const shelf = root.querySelector<HTMLDivElement>('[data-shelf]');
   const cauldron = root.querySelector<HTMLDivElement>('[data-cauldron]');
   const counter = root.querySelector<HTMLSpanElement>('[data-counter]');
-  const clearButton = root.querySelector<HTMLButtonElement>('[data-clear]');
+  const pourOutButton = root.querySelector<HTMLButtonElement>('[data-pour-out]');
   const runStartActions = root.querySelector<HTMLDivElement>('[data-run-start-actions]');
   const startButton = root.querySelector<HTMLButtonElement>('[data-start-game]');
   const continueButton = root.querySelector<HTMLButtonElement>('[data-continue-game]');
@@ -452,7 +463,7 @@ export function mountGameScreen(root: HTMLElement): void {
     !shelf ||
     !cauldron ||
     !counter ||
-    !clearButton ||
+    !pourOutButton ||
     !runStartActions ||
     !startButton ||
     !continueButton ||
@@ -579,7 +590,10 @@ export function mountGameScreen(root: HTMLElement): void {
     const hasActiveRun = state.hasStarted && !state.isGameOver;
     const isPlaying = hasActiveRun && !state.isPaused;
     const isFull = state.cauldronIngredients.length >= settings.cauldronCapacity;
-    const currentValues = calculateCauldron(state.cauldronIngredients);
+    const currentValues = calculateCauldronWithReactions(
+      state.cauldronIngredients,
+      state.difficulty,
+    );
     const recipe = state.activeRecipe;
 
     parameterBarElements.forEach(({ definition, bar, currentValue, targetLabel }) => {
@@ -610,8 +624,13 @@ export function mountGameScreen(root: HTMLElement): void {
     recipeName.textContent = recipe ? `${recipe.name} · ${recipe.difficulty}` : 'Begin your run';
     shelf.innerHTML = state.hasStarted
       ? shelfIngredients
-          .map((ingredient) =>
-            renderShelfCard(ingredient, state.shelfStock[ingredient.id] ?? 0, isFull || !isPlaying),
+          .map((ingredient, index) =>
+            renderShelfCard(
+              ingredient,
+              state.shelfStock[ingredient.id] ?? 0,
+              isFull || !isPlaying,
+              index + 1,
+            ),
           )
           .join('')
       : '';
@@ -620,11 +639,11 @@ export function mountGameScreen(root: HTMLElement): void {
     ).join('');
     counter.innerHTML = `${state.cauldronIngredients.length} <i>/</i> ${settings.cauldronCapacity}`;
     recipeCounter.classList.toggle('recipe-counter--full', isFull);
-    clearButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
-    clearButton.hidden = !isPlaying || state.cauldronIngredients.length === 0;
-    clearButton.setAttribute(
+    pourOutButton.disabled = !isPlaying || state.cauldronIngredients.length === 0;
+    pourOutButton.hidden = !isPlaying;
+    pourOutButton.setAttribute(
       'aria-label',
-      `Empty cauldron; ${state.cauldronIngredients.length} ingredients will be discarded`,
+      `Pour out; costs 10 seconds and discards ${state.cauldronIngredients.length} ingredients`,
     );
     runStartActions.hidden = state.hasStarted;
     startButton.textContent = state.isGameOver ? 'Start a New Run' : 'Start Game';
@@ -811,6 +830,128 @@ export function mountGameScreen(root: HTMLElement): void {
     persistProgress();
   };
 
+  const triggerBrewFeedback = (result: 'success' | 'failure'): void => {
+    const bowl = root.querySelector<HTMLElement>('.cauldron-bowl');
+    const explosion = root.querySelector<HTMLElement>('.brew-explosion');
+    const feedbackTarget = result === 'success' ? bowl : explosion;
+    if (!feedbackTarget) {
+      return;
+    }
+
+    const className = result === 'success' ? 'cauldron-bowl--success' : 'brew-explosion--active';
+    feedbackTarget.classList.remove(className);
+    void feedbackTarget.offsetWidth;
+    feedbackTarget.classList.add(className);
+    feedbackTarget.addEventListener(
+      'animationend',
+      () => feedbackTarget.classList.remove(className),
+      { once: true },
+    );
+    if (result === 'failure') {
+      const atelier = root.querySelector<HTMLElement>('.atelier');
+      atelier?.classList.add('atelier--brew-failure');
+      atelier?.addEventListener(
+        'animationend',
+        () => atelier.classList.remove('atelier--brew-failure'),
+        { once: true },
+      );
+    }
+  };
+
+  const handleIngredientAdd = (ingredientId: IngredientId): void => {
+    updateTimer();
+    if (state.isGameOver || state.isPaused || !state.hasStarted) {
+      return;
+    }
+
+    const ingredient = getShelfIngredients(state.difficulty).find(
+      (item) => item.id === ingredientId,
+    );
+    if (!ingredient) {
+      return;
+    }
+
+    const previousIngredients = [...state.cauldronIngredients];
+    if (!addIngredient(state, ingredient.id)) {
+      return;
+    }
+
+    const reactions = applyNewReactionEffects(state, previousIngredients);
+    endTime = Date.now() + state.timeRemainingMs;
+    status.textContent = reactions.length
+      ? `${ingredient.name} added. Reaction${reactions.length > 1 ? 's' : ''}: ${reactions.join(', ')}.`
+      : `${ingredient.name} added to the cauldron.`;
+    if (state.lives <= 0) {
+      endRun('lives');
+      return;
+    }
+    if (state.timeRemainingMs <= 0) {
+      endRun('time');
+      return;
+    }
+
+    render();
+    if (hasNoIngredients()) {
+      endRun('ingredients');
+    } else {
+      persistProgress();
+    }
+  };
+
+  const handleBrew = (): void => {
+    updateTimer();
+    if (state.isGameOver || state.isPaused) {
+      return;
+    }
+
+    const result = brewCauldron(state);
+    if (result.status === 'success') {
+      const settings = DIFFICULTY_SETTINGS[state.difficulty];
+      const maximumTime = formatTime(settings.startTimeSeconds * 1000);
+      status.textContent = `Brew successful! +${settings.scorePerBrew} score and +${settings.timeBonusSeconds} seconds (maximum ${maximumTime}). New recipe: ${state.activeRecipe?.name ?? 'ready'}.`;
+      triggerBrewFeedback('success');
+    } else if (result.status === 'failure') {
+      status.textContent = state.isGameOver
+        ? 'The brew failed. No lives remain; your run is over.'
+        : `The brew failed. 1 life lost; ${state.lives} remaining.`;
+      triggerBrewFeedback('failure');
+    } else {
+      return;
+    }
+
+    if (result.status === 'failure' && state.isGameOver) {
+      endRun('lives');
+      return;
+    }
+
+    endTime = Date.now() + state.timeRemainingMs;
+    render();
+    if (hasNoIngredients()) {
+      endRun('ingredients');
+    } else {
+      persistProgress();
+    }
+  };
+
+  const handlePourOut = (): void => {
+    updateTimer();
+    if (state.isGameOver || state.isPaused || !pourOut(state)) {
+      return;
+    }
+    endTime = Date.now() + state.timeRemainingMs;
+    if (state.timeRemainingMs <= 0) {
+      endRun('time');
+      return;
+    }
+    status.textContent = 'The mixture was poured out. Ingredients remain spent.';
+    render();
+    if (hasNoIngredients()) {
+      endRun('ingredients');
+    } else {
+      persistProgress();
+    }
+  };
+
   root.addEventListener('click', (event: MouseEvent) => {
     const target = event.target;
     if (!(target instanceof Element)) {
@@ -956,69 +1097,198 @@ export function mountGameScreen(root: HTMLElement): void {
 
     const ingredientButton = target.closest<HTMLButtonElement>('[data-ingredient-id]');
     if (ingredientButton && !ingredientButton.disabled) {
-      updateTimer();
-      if (state.isGameOver || state.isPaused) {
-        return;
-      }
+      const ingredientId = ingredientButton.dataset.ingredientId;
       const ingredient = getShelfIngredients(state.difficulty).find(
-        (item) => item.id === ingredientButton.dataset.ingredientId,
+        (item) => item.id === ingredientId,
       );
-      if (ingredient && addIngredient(state, ingredient.id)) {
-        status.textContent = `${ingredient.name} added to the cauldron.`;
-        render();
-        persistProgress();
+      if (ingredient) {
+        handleIngredientAdd(ingredient.id);
       }
       return;
     }
 
     if (target.closest('[data-brew]') && !brewButton.disabled) {
-      updateTimer();
-      if (state.isGameOver) {
-        return;
-      }
-
-      const result = brewCauldron(state);
-      if (result.status === 'success') {
-        const settings = DIFFICULTY_SETTINGS[state.difficulty];
-        const maximumTime = formatTime(settings.startTimeSeconds * 1000);
-        status.textContent = `Brew successful! +${settings.scorePerBrew} score and +${settings.timeBonusSeconds} seconds (maximum ${maximumTime}). New recipe: ${state.activeRecipe?.name ?? 'ready'}.`;
-      } else if (result.status === 'failure') {
-        status.textContent = state.isGameOver
-          ? 'The brew failed. No lives remain; your run is over.'
-          : `The brew failed. 1 life lost; ${state.lives} remaining.`;
-      } else {
-        return;
-      }
-
-      if (result.status === 'failure' && state.isGameOver) {
-        endRun('lives');
-        return;
-      }
-
-      endTime = Date.now() + state.timeRemainingMs;
-      render();
-      if (hasNoIngredients()) {
-        endRun('ingredients');
-      } else {
-        persistProgress();
-      }
+      handleBrew();
       return;
     }
 
-    if (target.closest('[data-clear]') && !clearButton.disabled) {
-      updateTimer();
-      if (state.isGameOver || state.isPaused) {
-        return;
-      }
-      const spentIngredients = state.cauldronIngredients.length;
-      clearCauldron(state);
-      status.textContent = `${spentIngredients} ingredient${spentIngredients === 1 ? '' : 's'} discarded. Shelf stock is unchanged.`;
-      if (hasNoIngredients()) {
-        endRun('ingredients');
-        return;
-      }
-      render();
-      persistProgress();
+    if (target.closest('[data-pour-out]') && !pourOutButton.disabled) {
+      handlePourOut();
+    }
+  });
+
+  let draggedIngredientId: IngredientId | null = null;
+
+  root.addEventListener('dragstart', (event: DragEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    const ingredientId = card?.dataset.ingredientId;
+    const ingredient = getShelfIngredients(state.difficulty).find(
+      (item) => item.id === ingredientId,
+    );
+    if (!card || card.disabled || !ingredient || !event.dataTransfer) {
+      event.preventDefault();
+      return;
+    }
+    draggedIngredientId = ingredient.id;
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', ingredient.id);
+  });
+
+  root.addEventListener('dragend', () => {
+    draggedIngredientId = null;
+    cauldron.classList.remove('cauldron-slots--drop-ready');
+  });
+
+  cauldron.addEventListener('dragover', (event: DragEvent) => {
+    if (
+      !draggedIngredientId ||
+      state.isPaused ||
+      state.isGameOver ||
+      !state.hasStarted ||
+      state.cauldronIngredients.length >= DIFFICULTY_SETTINGS[state.difficulty].cauldronCapacity ||
+      (state.shelfStock[draggedIngredientId] ?? 0) <= 0
+    ) {
+      cauldron.classList.remove('cauldron-slots--drop-ready');
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+    cauldron.classList.add('cauldron-slots--drop-ready');
+  });
+
+  cauldron.addEventListener('dragleave', (event: DragEvent) => {
+    if (event.relatedTarget instanceof Node && cauldron.contains(event.relatedTarget)) {
+      return;
+    }
+    cauldron.classList.remove('cauldron-slots--drop-ready');
+  });
+
+  cauldron.addEventListener('drop', (event: DragEvent) => {
+    event.preventDefault();
+    cauldron.classList.remove('cauldron-slots--drop-ready');
+    const ingredientId = event.dataTransfer?.getData('text/plain');
+    const ingredient = getShelfIngredients(state.difficulty).find(
+      (item) => item.id === ingredientId && item.id === draggedIngredientId,
+    );
+    draggedIngredientId = null;
+    if (ingredient) {
+      handleIngredientAdd(ingredient.id);
+    }
+  });
+
+  const updateTooltipPosition = (card: HTMLButtonElement): void => {
+    const rect = card.getBoundingClientRect();
+    const opensLeft = rect.right + 190 > window.innerWidth;
+    const opensUp = rect.bottom + 110 > window.innerHeight;
+    card.classList.toggle('ingredient-card--tooltip-left', opensLeft);
+    card.classList.toggle('ingredient-card--tooltip-up', opensUp);
+    card.style.setProperty(
+      '--tooltip-x',
+      `${Math.max(8, opensLeft ? rect.left - 190 : rect.right + 8)}px`,
+    );
+    card.style.setProperty(
+      '--tooltip-y',
+      `${Math.max(8, opensUp ? rect.top - 110 : rect.bottom + 8)}px`,
+    );
+  };
+
+  root.addEventListener('mouseover', (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    if (
+      !card ||
+      card.disabled ||
+      state.isPaused ||
+      (event.relatedTarget instanceof Node && card.contains(event.relatedTarget))
+    ) {
+      return;
+    }
+    const tooltip = card.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (tooltip) {
+      updateTooltipPosition(card);
+      tooltip.hidden = false;
+    }
+  });
+
+  root.addEventListener('mouseout', (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    if (!card || (event.relatedTarget instanceof Node && card.contains(event.relatedTarget))) {
+      return;
+    }
+    const tooltip = card.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (tooltip) {
+      tooltip.hidden = true;
+    }
+  });
+
+  root.addEventListener('focusin', (event: FocusEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    const tooltip = card?.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (card && tooltip && !card.disabled && !state.isPaused) {
+      updateTooltipPosition(card);
+      tooltip.hidden = false;
+    }
+  });
+
+  root.addEventListener('focusout', (event: FocusEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const card = target.closest<HTMLButtonElement>('[data-ingredient-id]');
+    const tooltip = card?.querySelector<HTMLElement>('.ingredient-tooltip');
+    if (card && tooltip) {
+      tooltip.hidden = true;
+    }
+  });
+
+  document.addEventListener('keydown', (event: KeyboardEvent) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.closest('input, textarea, select, [contenteditable="true"]'))
+    ) {
+      return;
+    }
+    if (!state.hasStarted || state.isPaused || state.isGameOver) {
+      return;
+    }
+
+    const key = event.key.toLowerCase();
+    if (key === 'p' || key === 'escape') {
+      event.preventDefault();
+      status.textContent = 'Run paused.';
+      pauseRun();
+    } else if (key === 'b') {
+      event.preventDefault();
+      handleBrew();
+    } else if (key === 'o') {
+      event.preventDefault();
+      handlePourOut();
+    } else if (/^[1-8]$/.test(key)) {
+      event.preventDefault();
+      const card = shelf.querySelector<HTMLButtonElement>(
+        `[data-shelf-order="${Number(key)}"]:not(:disabled)`,
+      );
+      card?.click();
     }
   });
 

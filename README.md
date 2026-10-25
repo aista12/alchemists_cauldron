@@ -18,15 +18,21 @@ Work is delivered incrementally through story branches and task pull requests:
 The current playable features are **US 1.1 — Ingredient Shelf & Cauldron**,
 **US 1.2 — Cauldron Parameter Bars**, **US 1.3 — Recipe & Brewing Check**,
 **US 1.4 — Timer & Game Over**, **US 1.5 — Pause**, **US 1.6 — Leaderboard**,
-**US 2.1 — Difficulty Selection**, and **US 2.2 — Auto-save & Continue Game**.
+**US 2.1 — Difficulty Selection**, **US 2.2 — Auto-save & Continue Game**,
+and **US 3.1–3.6 — Drag & Drop, Ingredient Tooltips, Chemical Reactions,
+Pour Out, Visual Feedback, and Keyboard Shortcuts**.
 Choose a difficulty and start a run to receive random stock for its available
 ingredients and a recipe of that difficulty. Add ingredients to the cauldron,
 watch the summed temperature, density, and magic power move on the animated
 bars, and brew when the values match the recipe. A successful brew awards the
 difficulty's points and time bonus; a failed brew costs a life. Stock spent on
 ingredients is not refunded. Scores qualifying for the per-difficulty Top 10
-can be saved with a validated player name. Unfinished runs are saved locally
-and can be continued in a paused state.
+can be saved with a validated player name. Unfinished runs are saved locally and can be continued in a paused state. During active play,
+ingredient cards can be clicked or dragged into the cauldron. Their base values
+are available in hover and keyboard-focus tooltips. Enabled reactions change
+the current brew values; reaction costs are applied only when a reaction first
+activates. Use **Pour Out** to discard a mixture for 10 seconds without losing a
+life. Successful and failed brews have CSS visual feedback.
 
 ## Repository structure
 
@@ -86,13 +92,14 @@ recipe tolerance, lives, brew score, time bonus, and reaction count.
 | Difficulty | Shelf ingredients | Cauldron capacity | Start time | Tolerance | Lives | Score per brew | Time bonus | Reactions |
 | ---------- | ----------------: | ----------------: | ---------: | --------: | ----: | -------------: | ---------: | --------: |
 | Easy       |                 4 |                 5 |      180 s |       ±12 |     5 |            150 |       15 s |         0 |
-| Medium     |                 6 |                 4 |      150 s |        ±8 |     3 |            200 |       10 s |         0 |
-| Hard       |                 8 |                 3 |      150 s |        ±5 |     3 |            300 |       10 s |         2 |
+| Medium     |                 6 |                 4 |      150 s |        ±8 |     3 |            200 |       10 s |         2 |
+| Hard       |                 8 |                 3 |      150 s |        ±5 |     3 |            300 |       10 s |         3 |
 
 To play, open **Settings**, choose Easy, Medium, or Hard, then select
 **Start Game**. Use **Help** for the rules. Add ingredients using their shelf
-cards, and press **Brew** to check the current mixture. **Empty cauldron**
-discards the current mixture without refunding stock. The timer is shown as **MM:SS** and a
+cards or drag them into the cauldron, and press **Brew** to check the current
+mixture. **Pour Out** discards the current mixture, costs 10 seconds, and does
+not refund stock or remove a life. The timer is shown as **MM:SS** and a
 remaining-time bar; it pulses red below 15 seconds. Use **Pause**, then
 **Resume** or **Exit to Menu** in the pause dialog. A hidden browser tab pauses
 the run automatically. The **Game Over** screen reports the end reason and
@@ -106,6 +113,11 @@ difficulty. If your result qualifies, submit a 2–15 character name using
 letters, digits, spaces, `_` or `-`. Equal scores keep the earlier result above
 the later one. **Clear Leaderboard** asks for confirmation before removing that
 difficulty's local results.
+
+During active play, use **1–8** to add the matching shelf ingredient, **B** to
+brew, **O** to pour out, and **P** or **Escape** to pause. While paused, use the
+focused **Resume** button with Enter or Space; game shortcuts are not intercepted
+on the menu, pause, or Game Over screens.
 
 | #   | Difficulty | Recipe name    | Temperature | Density | Magic Power |
 | --- | ---------- | -------------- | :---------: | :-----: | :---------: |
