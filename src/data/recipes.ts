@@ -214,7 +214,7 @@ export const DIFFICULTY_SETTINGS: Readonly<Record<Difficulty, DifficultySettings
     startingLives: STARTING_LIVES,
     scorePerBrew: SCORE_PER_BREW,
     timeBonusSeconds: TIME_BONUS_SECONDS,
-    reactionCount: 0,
+    reactionCount: 2,
   },
   Hard: {
     shelfSize: 8,
@@ -224,7 +224,7 @@ export const DIFFICULTY_SETTINGS: Readonly<Record<Difficulty, DifficultySettings
     startingLives: 3,
     scorePerBrew: 300,
     timeBonusSeconds: 10,
-    reactionCount: 2,
+    reactionCount: 3,
   },
 };
 

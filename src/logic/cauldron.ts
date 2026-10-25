@@ -1,35 +1,15 @@
-import { INGREDIENTS, getShelfIngredients, type IngredientId } from '../data/ingredients';
+import { getShelfIngredients, type IngredientId } from '../data/ingredients';
 import { DIFFICULTY_SETTINGS, LEVEL_ONE_RECIPE_TOLERANCE, pickRandomRecipe } from '../data/recipes';
+import { calculateCauldronWithReactions } from './reactions';
+import type { CauldronValues } from './cauldron-values';
 import type { GameState } from '../state/game-state';
 
-export interface CauldronValues {
-  temperature: number;
-  density: number;
-  magicPower: number;
-}
+export { calculateCauldron } from './cauldron-values';
+export type { CauldronValues } from './cauldron-values';
 
 export interface BrewResult {
   status: 'success' | 'failure' | 'unavailable';
   values: CauldronValues;
-}
-
-export function calculateCauldron(ingredients: readonly IngredientId[]): CauldronValues {
-  return ingredients.reduce<CauldronValues>(
-    (values, ingredientId) => {
-      const ingredient = INGREDIENTS.find((item) => item.id === ingredientId);
-
-      if (!ingredient) {
-        throw new Error(`Unknown cauldron ingredient: ${ingredientId}`);
-      }
-
-      return {
-        temperature: values.temperature + ingredient.temperature,
-        density: values.density + ingredient.density,
-        magicPower: values.magicPower + ingredient.magicPower,
-      };
-    },
-    { temperature: 0, density: 0, magicPower: 0 },
-  );
 }
 
 export function checkRecipe(
@@ -48,7 +28,7 @@ export function checkRecipe(
 }
 
 export function brewCauldron(state: GameState, random: () => number = Math.random): BrewResult {
-  const values = calculateCauldron(state.cauldronIngredients);
+  const values = calculateCauldronWithReactions(state.cauldronIngredients, state.difficulty);
 
   if (
     !state.hasStarted ||
@@ -102,4 +82,19 @@ export function addIngredient(state: GameState, ingredientId: IngredientId): boo
 
 export function clearCauldron(state: GameState): void {
   state.cauldronIngredients = [];
+}
+
+export function pourOut(state: GameState): boolean {
+  if (
+    !state.hasStarted ||
+    state.isPaused ||
+    state.isGameOver ||
+    state.cauldronIngredients.length === 0
+  ) {
+    return false;
+  }
+
+  clearCauldron(state);
+  state.timeRemainingMs = Math.max(0, state.timeRemainingMs - 10_000);
+  return true;
 }
