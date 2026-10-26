@@ -1,9 +1,0 @@
-{
-  "name": "alchemists-cauldron",
-  "version": "0.1.0",
-  "description": "A TypeScript browser-based alchemy mini-game",
-  "license": "UNLICENSED",
-  "devDependencies": {
-    "typescript": "^5.9.3"
-  }
-}
